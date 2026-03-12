@@ -1,0 +1,18 @@
+{
+  "name": "trellis",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Trellis — AI Educational Assistant for adapting worksheets",
+  "workspaces": [
+    "app",
+    "server"
+  ],
+  "scripts": {
+    "app": "npm run start --workspace=app",
+    "server": "npm run dev --workspace=server",
+    "dev": "concurrently \"npm run app\" \"npm run server\""
+  },
+  "dependencies": {
+    "expo-splash-screen": "~55.0.10"
+  }
+}

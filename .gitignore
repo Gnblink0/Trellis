@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.local
+dist/
+.expo/
+*.tsbuildinfo
+
+document/
+worksheets/
+
+/Users/gnblink/2Project/2026_Code/Trellis/document
