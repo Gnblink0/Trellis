@@ -14,7 +14,7 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, typography, spacing, radii, shadows } from '../theme';
-import { RootStackParamList, AdaptationSummary } from '../navigation/types';
+import { RootStackParamList, AdaptationSummary, AdaptedZone } from '../navigation/types';
 import ScreenHeader from '../components/ScreenHeader';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'WorksheetView'>;
@@ -677,32 +677,61 @@ export default function WorksheetViewScreen() {
         </Text>
       </View>
 
-      {/* FAB — Export (bottom-left to avoid blocking the side panel) */}
-      <Pressable
-        style={styles.fab}
-        onPress={() => {
-          // Build zone label lookup from all pages
-          const zoneLabelMap: Record<string, string> = {};
-          PAGES.forEach((p) => p.zones.forEach((z) => { zoneLabelMap[z.id] = z.label; }));
+      {/* Bottom action buttons */}
+      <View style={styles.fabRow}>
+        <Pressable
+          style={styles.fabSecondary}
+          onPress={() => {
+            const zoneLabelMap: Record<string, string> = {};
+            PAGES.forEach((p) => p.zones.forEach((z) => { zoneLabelMap[z.id] = z.label; }));
 
-          const summaries: AdaptationSummary[] = Object.entries(adaptedZones).map(
-            ([zoneId, adapt]) => ({
-              zoneId,
-              zoneLabel: zoneLabelMap[zoneId] ?? zoneId,
-              action: adapt.action,
-              original: adapt.original,
-              result: adapt.result,
-            }),
-          );
-          navigation.navigate('Export', {
-            title: 'The Water Cycle',
-            adaptations: summaries,
-          });
-        }}
-      >
-        <Ionicons name="download-outline" size={22} color={colors.surface} />
-        <Text style={styles.fabText}>Export</Text>
-      </Pressable>
+            const summaries: AdaptationSummary[] = Object.entries(adaptedZones).map(
+              ([zoneId, adapt]) => ({
+                zoneId,
+                zoneLabel: zoneLabelMap[zoneId] ?? zoneId,
+                action: adapt.action,
+                original: adapt.original,
+                result: adapt.result,
+              }),
+            );
+            navigation.navigate('Export', {
+              title: 'The Water Cycle',
+              adaptations: summaries,
+            });
+          }}
+        >
+          <Ionicons name="download-outline" size={20} color={colors.primary} />
+          <Text style={styles.fabSecondaryText}>Export</Text>
+        </Pressable>
+
+        <Pressable
+          style={styles.fab}
+          onPress={() => {
+            const zoneLabelMap: Record<string, string> = {};
+            PAGES.forEach((p) => p.zones.forEach((z) => { zoneLabelMap[z.id] = z.label; }));
+
+            const adapted: AdaptedZone[] = Object.entries(adaptedZones).map(
+              ([zoneId, adapt]) => ({
+                zoneId,
+                zoneLabel: zoneLabelMap[zoneId] ?? zoneId,
+                action: adapt.action,
+                original: adapt.original,
+                result: adapt.result,
+                keywords: adapt.keywords,
+                bullets: adapt.bullets,
+                visuals: adapt.visuals,
+              }),
+            );
+            navigation.navigate('StudentView', {
+              title: 'The Water Cycle',
+              adaptations: adapted,
+            });
+          }}
+        >
+          <Ionicons name="school" size={20} color={colors.surface} />
+          <Text style={styles.fabText}>Hand to Student</Text>
+        </Pressable>
+      </View>
     </SafeAreaView>
   );
 }
@@ -986,17 +1015,34 @@ const styles = StyleSheet.create({
   },
   hintText: { ...typography.caption, color: colors.textSecondary },
 
-  // FAB
-  fab: {
+  // FAB row
+  fabRow: {
     position: 'absolute',
     bottom: 56,
     left: spacing.pagePadding,
+    flexDirection: 'row',
+    gap: spacing.innerGapSmall,
+  },
+  fabSecondary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radii.circle,
+    paddingHorizontal: spacing.innerGap,
+    paddingVertical: spacing.innerGapSmall,
+    gap: spacing.innerGapSmall,
+    borderWidth: 1,
+    borderColor: colors.surfaceMuted,
+    ...shadows.floatingToolbar,
+  },
+  fabSecondaryText: { ...typography.cardTitle, color: colors.primary },
+  fab: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.primary,
     borderRadius: radii.circle,
     paddingHorizontal: spacing.pagePadding,
-    paddingVertical: spacing.innerGap,
+    paddingVertical: spacing.innerGapSmall,
     gap: spacing.innerGapSmall,
     ...shadows.fab,
   },
