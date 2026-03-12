@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,8 @@ import {
   ScrollView,
   TextInput,
   LayoutChangeEvent,
+  Alert,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -15,6 +17,19 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, typography, spacing, radii, shadows } from '../theme';
 import { RootStackParamList, AdaptedZone } from '../navigation/types';
 import ScreenHeader from '../components/ScreenHeader';
+import DrawingCanvas, { DrawingTool, DrawingData } from '../components/DrawingCanvas';
+import DrawingToolbar from '../components/DrawingToolbar';
+import FloatingMarker, { MarkerData } from '../components/FloatingMarker';
+
+// Native-only imports (ViewShot, MediaLibrary, Sharing)
+let ViewShot: any = View; // fallback to View on web
+let MediaLibrary: any = null;
+let Sharing: any = null;
+if (Platform.OS !== 'web') {
+  ViewShot = require('react-native-view-shot').default;
+  MediaLibrary = require('expo-media-library');
+  Sharing = require('expo-sharing');
+}
 
 type Route = RouteProp<RootStackParamList, 'StudentView'>;
 
@@ -54,81 +69,6 @@ const PAGES: PageDef[] = [
 const IMAGE_ASPECT = 595 / 842;
 
 // ---------------------------------------------------------------------------
-// Adaptation helper panel
-// ---------------------------------------------------------------------------
-function HelpPanel({
-  data,
-  onClose,
-}: {
-  data: AdaptedZone;
-  onClose: () => void;
-}) {
-  const actionLabels: Record<string, string> = {
-    simplify: 'Simplified',
-    visuals: 'Visuals',
-    summarize: 'Summary',
-  };
-  const actionIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
-    simplify: 'text',
-    visuals: 'image',
-    summarize: 'list',
-  };
-
-  return (
-    <View style={styles.helpPanel}>
-      <View style={styles.helpHeader}>
-        <View style={styles.helpTitleRow}>
-          <Ionicons name={actionIcons[data.action]} size={16} color={colors.primary} />
-          <Text style={styles.helpTitle}>
-            {data.zoneLabel} — {actionLabels[data.action]}
-          </Text>
-        </View>
-        <Pressable onPress={onClose} style={styles.helpClose}>
-          <Ionicons name="close" size={18} color={colors.textSecondary} />
-        </Pressable>
-      </View>
-
-      <ScrollView style={styles.helpScroll} showsVerticalScrollIndicator={false}>
-        <View style={styles.helpResultBlock}>
-          <Text style={styles.helpResultText}>{data.result}</Text>
-        </View>
-
-        {data.keywords && data.keywords.length > 0 && (
-          <View style={styles.helpChipsRow}>
-            {data.keywords.map((w) => (
-              <View key={w} style={styles.helpChip}>
-                <Text style={styles.helpChipText}>{w}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {data.bullets && data.bullets.length > 0 && (
-          <View style={styles.helpBullets}>
-            {data.bullets.map((b) => (
-              <View key={b} style={styles.helpBulletRow}>
-                <Text style={styles.helpBulletDot}>•</Text>
-                <Text style={styles.helpBulletText}>{b}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {data.visuals && data.visuals.length > 0 && (
-          <View style={styles.helpVisuals}>
-            {data.visuals.map((v) => (
-              <View key={v} style={styles.helpVisualItem}>
-                <Text style={styles.helpVisualText}>{v}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-      </ScrollView>
-    </View>
-  );
-}
-
-// ---------------------------------------------------------------------------
 // Main student screen
 // ---------------------------------------------------------------------------
 export default function StudentViewScreen() {
@@ -141,18 +81,170 @@ export default function StudentViewScreen() {
   const [pageIndex, setPageIndex] = useState(0);
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [selectedHelp, setSelectedHelp] = useState<AdaptedZone | null>(null);
 
+  // Drawing state
+  const [drawingTool, setDrawingTool] = useState<DrawingTool>('pen');
+  const [drawingColor, setDrawingColor] = useState('#000000');
+  const [strokeWidth, setStrokeWidth] = useState(4);
+  const [drawingData, setDrawingData] = useState<DrawingData>({ paths: [], shapes: [], texts: [] });
+  const [drawingHistory, setDrawingHistory] = useState<DrawingData[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportMode, setExportMode] = useState(false); // render all pages for capture
+
+  const viewShotRef = useRef<any>(null);
   const currentPage = PAGES[pageIndex];
 
   const goToPage = (idx: number) => {
     setPageIndex(idx);
-    setSelectedHelp(null);
   };
 
   const handleImageLayout = (e: LayoutChangeEvent) => {
     const { width } = e.nativeEvent.layout;
     setImageSize({ width, height: width / IMAGE_ASPECT });
+  };
+
+  // Zone data from WorksheetViewScreen
+  const ZONE_POSITIONS: Record<string, { top: number; left: number; width: number; height: number }> = {
+    intro: { top: 5.5, left: 3, width: 94, height: 10 },
+    funfact: { top: 16, left: 3, width: 94, height: 10 },
+    accumulation: { top: 27, left: 3, width: 46, height: 24 },
+    evaporation: { top: 51, left: 3, width: 46, height: 20 },
+    condensation: { top: 71, left: 3, width: 46, height: 12 },
+    precipitation: { top: 27, left: 51, width: 46, height: 56 },
+  };
+
+  // Convert adaptations to markers with proper positions
+  const markers: MarkerData[] =
+    pageIndex === 0
+      ? adaptations.map((a, index) => {
+          const zoneRect = ZONE_POSITIONS[a.zoneId];
+          const basePosition = zoneRect
+            ? {
+                x: zoneRect.left + zoneRect.width / 2,
+                y: zoneRect.top + zoneRect.height / 2,
+              }
+            : { x: 50, y: 20 + index * 15 };
+
+          // Offset slightly for multiple markers on same zone
+          const sameZoneIndex = adaptations
+            .slice(0, index)
+            .filter((prev) => prev.zoneId === a.zoneId).length;
+
+          return {
+            id: `${a.zoneId}-${a.action}`,
+            type: a.action,
+            label: a.zoneLabel,
+            position: {
+              x: basePosition.x + sameZoneIndex * 3,
+              y: basePosition.y + sameZoneIndex * 3,
+            },
+            content: {
+              original: a.original,
+              result: a.result,
+              keywords: a.keywords,
+              bullets: a.bullets,
+              visuals: a.visuals,
+            },
+          };
+        })
+      : [];
+
+  // Drawing controls
+  const handleUndo = () => {
+    if (historyIndex > 0) {
+      const newIndex = historyIndex - 1;
+      setHistoryIndex(newIndex);
+      setDrawingData(drawingHistory[newIndex]);
+    }
+  };
+
+  const handleRedo = () => {
+    if (historyIndex < drawingHistory.length - 1) {
+      const newIndex = historyIndex + 1;
+      setHistoryIndex(newIndex);
+      setDrawingData(drawingHistory[newIndex]);
+    }
+  };
+
+  const handleClear = () => {
+    const emptyData: DrawingData = { paths: [], shapes: [], texts: [] };
+    setDrawingData(emptyData);
+    setDrawingHistory([emptyData]);
+    setHistoryIndex(0);
+  };
+
+  const handleDrawingChange = (data: DrawingData) => {
+    setDrawingData(data);
+    const newHistory = drawingHistory.slice(0, historyIndex + 1);
+    newHistory.push(data);
+    setDrawingHistory(newHistory);
+    setHistoryIndex(newHistory.length - 1);
+  };
+
+  const handleExport = () => {
+    setIsExporting(true);
+    setExportMode(true); // render all pages, then capture in effect
+  };
+
+  // Capture after all pages render in export mode
+  const handleExportCapture = async () => {
+    if (!exportMode || !isExporting) return;
+
+    // Small delay to let all images render
+    await new Promise((r) => setTimeout(r, 500));
+
+    try {
+      if (Platform.OS === 'web') {
+        const { toPng } = await import('html-to-image');
+        let domNode: HTMLElement | null = null;
+        const ref = viewShotRef.current;
+        if (ref instanceof HTMLElement) {
+          domNode = ref;
+        } else if (ref?.getNode) {
+          domNode = ref.getNode();
+        }
+        if (!domNode) {
+          domNode = document.querySelector('[data-testid="worksheet-capture"]') as HTMLElement;
+        }
+        if (domNode) {
+          const dataUrl = await toPng(domNode, { quality: 1.0, pixelRatio: 2 });
+          const link = document.createElement('a');
+          link.download = `${title.replace(/\s+/g, '_')}_worksheet.png`;
+          link.href = dataUrl;
+          link.click();
+        }
+      } else {
+        // Native: capture with ViewShot and save to Photos
+        const { status } = await MediaLibrary.requestPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permission needed', 'Please grant permission to save images to your library.');
+          return;
+        }
+        if (viewShotRef.current?.capture) {
+          const uri = await viewShotRef.current.capture();
+          const asset = await MediaLibrary.createAssetAsync(uri);
+          await MediaLibrary.createAlbumAsync('Trellis', asset, false);
+          Alert.alert('Success!', 'Worksheet exported to your Photos library.', [
+            {
+              text: 'Share',
+              onPress: async () => {
+                if (await Sharing.isAvailableAsync()) {
+                  await Sharing.shareAsync(uri);
+                }
+              },
+            },
+            { text: 'OK' },
+          ]);
+        }
+      }
+    } catch (error) {
+      console.error('Export failed:', error);
+      Alert.alert('Export failed', 'Could not export the worksheet. Please try again.');
+    } finally {
+      setExportMode(false);
+      setIsExporting(false);
+    }
   };
 
   return (
@@ -165,13 +257,13 @@ export default function StudentViewScreen() {
         <Text style={styles.bannerText}>Student Mode</Text>
         {adaptations.length > 0 && (
           <Text style={styles.bannerHint}>
-            Tap the green badges to see simplified content
+            Tap green badges for hints • Use toolbar to annotate
           </Text>
         )}
       </View>
 
       <View style={styles.content}>
-        {/* Left: Worksheet */}
+        {/* Worksheet area */}
         <View style={styles.worksheetArea}>
           {/* Page nav */}
           <View style={styles.pageNav}>
@@ -187,14 +279,17 @@ export default function StudentViewScreen() {
               />
             </Pressable>
             <View style={styles.pageIndicator}>
-              {PAGES.map((p, i) => (
+              {PAGES.map((_p, i) => (
                 <Pressable key={i} onPress={() => goToPage(i)} style={styles.pageDotWrap}>
+                  {/* Dot */}
                   <View style={[styles.pageDot, i === pageIndex && styles.pageDotActive]} />
-                  <Text style={[styles.pageDotLabel, i === pageIndex && styles.pageDotLabelActive]}>
-                    {p.label}
-                  </Text>
+                  {/* Dash connector (except after last dot) */}
+                  {i < PAGES.length - 1 && (
+                    <View style={[styles.pageDash, i < pageIndex && styles.pageDashDone]} />
+                  )}
                 </Pressable>
               ))}
+              <Text style={styles.pageLabel}>{pageIndex + 1} / {PAGES.length}</Text>
             </View>
             <Pressable
               onPress={() => goToPage(pageIndex + 1)}
@@ -217,93 +312,114 @@ export default function StudentViewScreen() {
             contentContainerStyle={styles.worksheetScrollContent}
             showsVerticalScrollIndicator={false}
           >
-            <View style={styles.imageWrapper} onLayout={handleImageLayout}>
-              <Image
-                source={currentPage.image}
-                style={[
-                  styles.worksheetImage,
-                  imageSize.height > 0 && { height: imageSize.height },
-                ]}
-                resizeMode="contain"
-              />
-
-              {/* Adaptation badges (tappable to view help) */}
-              {imageSize.width > 0 &&
-                adaptations.map((a) => {
-                  // Only show badges on reading page (page 0)
-                  if (pageIndex !== 0) return null;
-                  // We don't know exact positions from adaptations, so show as a floating list
-                  return null;
-                })}
-
-              {/* Input zones for question pages */}
-              {imageSize.width > 0 &&
-                currentPage.inputZones?.map((zone) => (
-                  <TextInput
-                    key={zone.id}
+            <ViewShot
+              ref={viewShotRef}
+              options={{ format: 'png', quality: 1.0 }}
+              testID="worksheet-capture"
+              onLayout={exportMode ? () => handleExportCapture() : undefined}
+            >
+              {exportMode ? (
+                /* Export mode: render ALL pages stacked */
+                PAGES.map((page, pi) => (
+                  <View key={pi} style={styles.imageWrapper}>
+                    <Image
+                      source={page.image}
+                      style={styles.worksheetImage}
+                      resizeMode="contain"
+                    />
+                  </View>
+                ))
+              ) : (
+                /* Normal mode: single page with interactivity */
+                <View style={styles.imageWrapper} onLayout={handleImageLayout}>
+                  <Image
+                    source={currentPage.image}
                     style={[
-                      styles.inputOverlay,
-                      {
-                        top: `${zone.rect.top}%`,
-                        left: `${zone.rect.left}%`,
-                        width: `${zone.rect.width}%`,
-                        height: `${zone.rect.height}%`,
-                      },
+                      styles.worksheetImage,
+                      imageSize.height > 0 && { height: imageSize.height },
                     ]}
-                    placeholder={zone.placeholder}
-                    placeholderTextColor={colors.textSecondary}
-                    value={answers[zone.id] ?? ''}
-                    onChangeText={(text) =>
-                      setAnswers((prev) => ({ ...prev, [zone.id]: text }))
-                    }
-                    multiline={zone.multiline}
+                    resizeMode="contain"
                   />
-                ))}
-            </View>
+
+                  {/* Floating markers for adaptations */}
+                  {imageSize.width > 0 &&
+                    markers.map((marker) => (
+                      <FloatingMarker
+                        key={marker.id}
+                        marker={marker}
+                        worksheetWidth={imageSize.width}
+                        worksheetHeight={imageSize.height}
+                      />
+                    ))}
+
+                  {/* Input zones for question pages */}
+                  {imageSize.width > 0 &&
+                    currentPage.inputZones?.map((zone) => (
+                      <TextInput
+                        key={zone.id}
+                        style={[
+                          styles.inputOverlay,
+                          {
+                            top: `${zone.rect.top}%`,
+                            left: `${zone.rect.left}%`,
+                            width: `${zone.rect.width}%`,
+                            height: `${zone.rect.height}%`,
+                          },
+                        ]}
+                        placeholder={zone.placeholder}
+                        placeholderTextColor={colors.textSecondary}
+                        value={answers[zone.id] ?? ''}
+                        onChangeText={(text) =>
+                          setAnswers((prev) => ({ ...prev, [zone.id]: text }))
+                        }
+                        multiline={zone.multiline}
+                      />
+                    ))}
+
+                  {/* Drawing canvas overlay */}
+                  {imageSize.width > 0 && (
+                    <DrawingCanvas
+                      width={imageSize.width}
+                      height={imageSize.height}
+                      tool={drawingTool}
+                      color={drawingColor}
+                      strokeWidth={strokeWidth}
+                      onDrawingChange={handleDrawingChange}
+                      initialData={drawingData}
+                    />
+                  )}
+                </View>
+              )}
+            </ViewShot>
           </ScrollView>
         </View>
-
-        {/* Right: help panel OR adaptation list */}
-        <View style={styles.sideArea}>
-          {selectedHelp ? (
-            <HelpPanel data={selectedHelp} onClose={() => setSelectedHelp(null)} />
-          ) : adaptations.length > 0 ? (
-            <View style={styles.adaptList}>
-              <Text style={styles.adaptListTitle}>Adapted Sections</Text>
-              <Text style={styles.adaptListHint}>Tap to view</Text>
-              <ScrollView showsVerticalScrollIndicator={false}>
-                {adaptations.map((a) => {
-                  const icons: Record<string, keyof typeof Ionicons.glyphMap> = {
-                    simplify: 'text',
-                    visuals: 'image',
-                    summarize: 'list',
-                  };
-                  return (
-                    <Pressable
-                      key={a.zoneId}
-                      style={styles.adaptItem}
-                      onPress={() => setSelectedHelp(a)}
-                    >
-                      <View style={styles.adaptItemIcon}>
-                        <Ionicons name={icons[a.action]} size={16} color={colors.primary} />
-                      </View>
-                      <Text style={styles.adaptItemLabel} numberOfLines={1}>
-                        {a.zoneLabel}
-                      </Text>
-                      <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
-                    </Pressable>
-                  );
-                })}
-              </ScrollView>
-            </View>
-          ) : (
-            <View style={styles.emptyHelp}>
-              <Ionicons name="book-outline" size={32} color={colors.surfaceMuted} />
-              <Text style={styles.emptyHelpText}>No adaptations</Text>
-            </View>
-          )}
-        </View>
       </View>
+
+      {/* Drawing toolbar */}
+      <View style={styles.drawingToolbarContainer}>
+        <DrawingToolbar
+          tool={drawingTool}
+          color={drawingColor}
+          strokeWidth={strokeWidth}
+          onToolChange={setDrawingTool}
+          onColorChange={setDrawingColor}
+          onStrokeWidthChange={setStrokeWidth}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          onClear={handleClear}
+          canUndo={historyIndex > 0}
+          canRedo={historyIndex < drawingHistory.length - 1}
+        />
+      </View>
+
+      {/* Export button */}
+      <Pressable
+        style={styles.fab}
+        onPress={handleExport}
+      >
+        <Ionicons name={isExporting ? 'hourglass' : 'download-outline'} size={20} color={colors.surface} />
+        <Text style={styles.fabText}>{isExporting ? 'Exporting...' : 'Export Worksheet'}</Text>
+      </Pressable>
     </SafeAreaView>
   );
 }
@@ -335,9 +451,9 @@ const styles = StyleSheet.create({
   },
 
   // Worksheet
-  worksheetArea: { flex: 1, paddingLeft: spacing.pagePadding, paddingRight: spacing.innerGap },
+  worksheetArea: { flex: 1, paddingHorizontal: spacing.pagePadding },
   worksheetScroll: { flex: 1 },
-  worksheetScrollContent: { paddingBottom: 40 },
+  worksheetScrollContent: { paddingBottom: 100 },
   imageWrapper: { position: 'relative' },
   worksheetImage: { width: '100%', borderRadius: radii.chip },
 
@@ -358,17 +474,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   pageNavBtnDisabled: { opacity: 0.4 },
-  pageIndicator: { flexDirection: 'row', alignItems: 'center', gap: spacing.innerGap },
-  pageDotWrap: { alignItems: 'center', gap: 4 },
+  pageIndicator: { flexDirection: 'row', alignItems: 'center', gap: 0 },
+  pageDotWrap: { flexDirection: 'row', alignItems: 'center' },
   pageDot: {
-    width: 8,
-    height: 8,
+    width: 10,
+    height: 10,
     borderRadius: radii.circle,
     backgroundColor: colors.surfaceMuted,
   },
-  pageDotActive: { backgroundColor: colors.primary, width: 10, height: 10 },
-  pageDotLabel: { ...typography.micro, color: colors.textSecondary },
-  pageDotLabelActive: { color: colors.primary },
+  pageDotActive: { backgroundColor: colors.primary, width: 12, height: 12 },
+  pageDash: {
+    width: 24,
+    height: 2,
+    backgroundColor: colors.surfaceMuted,
+  },
+  pageDashDone: { backgroundColor: colors.primary },
+  pageLabel: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginLeft: spacing.innerGapSmall,
+  },
 
   // Input overlays (for students to type answers)
   inputOverlay: {
@@ -383,127 +508,27 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
 
-  // Side area
-  sideArea: {
-    width: 280,
-    paddingRight: spacing.pagePadding,
+  // Drawing toolbar
+  drawingToolbarContainer: {
+    position: 'absolute',
+    top: 80,
+    left: spacing.pagePadding,
+  },
+
+  // FAB (unified with EA view)
+  fab: {
+    position: 'absolute',
+    bottom: 40,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+    borderRadius: radii.circle,
+    paddingHorizontal: spacing.pagePadding,
     paddingVertical: spacing.innerGapSmall,
-  },
-
-  // Adaptation list
-  adaptList: {
-    flex: 1,
-    backgroundColor: colors.surface,
-    borderRadius: radii.card,
-    padding: spacing.innerGap,
-  },
-  adaptListTitle: {
-    ...typography.cardTitle,
-    color: colors.textPrimary,
-    marginBottom: 4,
-  },
-  adaptListHint: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    marginBottom: spacing.innerGap,
-  },
-  adaptItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: spacing.innerGapSmall,
-    paddingVertical: spacing.innerGapSmall,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.surfaceMuted,
+    zIndex: 999,
+    ...shadows.fab,
   },
-  adaptItemIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: radii.circle,
-    backgroundColor: colors.primaryLight,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  adaptItemLabel: {
-    ...typography.resultItem,
-    color: colors.textPrimary,
-    flex: 1,
-  },
-
-  // Help panel (expanded adaptation view)
-  helpPanel: {
-    flex: 1,
-    backgroundColor: colors.surface,
-    borderRadius: radii.card,
-    padding: spacing.innerGap,
-    ...shadows.modalSheet,
-  },
-  helpHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing.innerGap,
-  },
-  helpTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.innerGapSmall,
-    flex: 1,
-  },
-  helpTitle: {
-    ...typography.cardTitle,
-    color: colors.textPrimary,
-    flex: 1,
-  },
-  helpClose: {
-    width: 28,
-    height: 28,
-    borderRadius: radii.circle,
-    backgroundColor: colors.surfaceMuted,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  helpScroll: { flex: 1 },
-  helpResultBlock: {
-    backgroundColor: colors.primaryLight,
-    borderRadius: radii.chip,
-    padding: spacing.innerGap,
-    marginBottom: spacing.innerGap,
-  },
-  helpResultText: { ...typography.body, color: colors.textPrimary },
-  helpChipsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.innerGapSmall,
-    marginBottom: spacing.innerGap,
-  },
-  helpChip: {
-    backgroundColor: colors.primaryLight,
-    borderRadius: radii.circle,
-    paddingHorizontal: spacing.innerGap,
-    paddingVertical: 6,
-  },
-  helpChipText: { ...typography.caption, color: colors.primary },
-  helpBullets: { gap: spacing.innerGapSmall, marginBottom: spacing.innerGap },
-  helpBulletRow: { flexDirection: 'row', gap: spacing.innerGapSmall },
-  helpBulletDot: { ...typography.body, color: colors.primary },
-  helpBulletText: { ...typography.body, color: colors.textPrimary, flex: 1 },
-  helpVisuals: { gap: spacing.innerGapSmall, marginBottom: spacing.innerGap },
-  helpVisualItem: {
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: radii.chip,
-    padding: spacing.innerGap,
-    alignItems: 'center',
-  },
-  helpVisualText: { ...typography.bodySmall, color: colors.textSecondary },
-
-  // Empty state
-  emptyHelp: {
-    flex: 1,
-    backgroundColor: colors.surface,
-    borderRadius: radii.card,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.innerGapSmall,
-  },
-  emptyHelpText: { ...typography.bodySmall, color: colors.textSecondary },
+  fabText: { ...typography.cardTitle, color: colors.surface },
 });

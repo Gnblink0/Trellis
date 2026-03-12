@@ -14,10 +14,8 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, typography, spacing, radii, shadows } from '../theme';
-import { RootStackParamList, AdaptedZone } from '../navigation/types';
+import { RootStackParamList, AdaptationSummary, AdaptedZone } from '../navigation/types';
 import ScreenHeader from '../components/ScreenHeader';
-import FloatingMarker, { MarkerData } from '../components/FloatingMarker';
-import AdaptationPreviewModal from '../components/AdaptationPreviewModal';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'WorksheetView'>;
 
@@ -219,7 +217,7 @@ const MOCK_RESULTS: Record<string, Record<ToolbarAction, Adaptation>> = {
       bullets: ['Heavy clouds release water', '4 types: rain, hail, sleet, snow', 'Gives water to plants & animals'],
     },
   },
-  // Page 2 & 3 zones
+  // Page 2 — Answers
   q1: {
     simplify: { action: 'simplify', original: 'Match each word to the correct definition: Precipitation, Evaporation, Accumulation, Condensation, Transpiration.', result: 'Draw a line from each water cycle word to what it means.', keywords: ['match', 'definition'] },
     visuals: { action: 'visuals', original: 'Match each word to the correct definition...', result: 'Added colour-coded matching hints.', visuals: ['🔵 Word-to-definition colour lines'] },
@@ -240,6 +238,7 @@ const MOCK_RESULTS: Record<string, Record<ToolbarAction, Adaptation>> = {
     visuals: { action: 'visuals', original: 'Q4–Q6 short answer questions...', result: 'Added visual answer hints.', visuals: ['☁️ Cloud diagram for Q4', '☀️ → 💨 for Q5', '🌧️ → 🌿 for Q6'] },
     summarize: { action: 'summarize', original: 'Q4–Q6 short answer questions...', result: 'Answer summaries:', bullets: ['Q4: Clouds = water droplets', 'Q5: Sun heats water → gas', 'Q6: Rain gives water to plants & animals'] },
   },
+  // Page 3 — Questions (blank) — same content as page 2 but framed as questions
   q1_blank: {
     simplify: { action: 'simplify', original: 'Match each word to the correct definition.', result: 'Draw a line from each word to its meaning.', keywords: ['match', 'definition'] },
     visuals: { action: 'visuals', original: 'Match each word to the correct definition.', result: 'Added visual word bank with icons.', visuals: ['🏷️ Illustrated word cards'] },
@@ -263,9 +262,131 @@ const MOCK_RESULTS: Record<string, Record<ToolbarAction, Adaptation>> = {
 };
 
 // ---------------------------------------------------------------------------
+// Panel content component
+// ---------------------------------------------------------------------------
+function PanelContent({
+  data,
+  isAlreadyApplied,
+  onApply,
+  onDismiss,
+}: {
+  data: Adaptation | null;
+  isAlreadyApplied: boolean;
+  onApply: () => void;
+  onDismiss: () => void;
+}) {
+  if (!data) return null;
+  const meta = ACTION_META[data.action];
+
+  return (
+    <View style={styles.panelInner}>
+      <View style={styles.panelHeader}>
+        <View style={styles.panelTitleRow}>
+          <Ionicons name={meta.icon} size={18} color={colors.primary} />
+          <Text style={styles.panelTitle}>{meta.label}</Text>
+        </View>
+        <Pressable onPress={onDismiss} style={styles.panelClose}>
+          <Ionicons name="close" size={20} color={colors.textSecondary} />
+        </Pressable>
+      </View>
+
+      <ScrollView style={styles.panelScroll} showsVerticalScrollIndicator={false}>
+        <Text style={styles.panelLabel}>Original</Text>
+        <View style={styles.panelTextBlock}>
+          <Text style={styles.panelOriginalText}>{data.original}</Text>
+        </View>
+
+        <View style={styles.arrowRow}>
+          <Ionicons name="arrow-down" size={20} color={colors.primary} />
+        </View>
+
+        {data.action === 'simplify' && (
+          <>
+            <Text style={styles.panelLabel}>Simplified</Text>
+            <View style={styles.panelResultBlock}>
+              <Text style={styles.panelResultText}>{data.result}</Text>
+            </View>
+            {data.keywords && (
+              <>
+                <Text style={styles.panelLabel}>Key Words</Text>
+                <View style={styles.keywordsRow}>
+                  {data.keywords.map((w) => (
+                    <View key={w} style={styles.keywordChip}>
+                      <Text style={styles.keywordText}>{w}</Text>
+                    </View>
+                  ))}
+                </View>
+              </>
+            )}
+          </>
+        )}
+
+        {data.action === 'visuals' && (
+          <>
+            <Text style={styles.panelLabel}>Visual Supports</Text>
+            <View style={styles.panelResultBlock}>
+              <Text style={styles.panelResultText}>{data.result}</Text>
+            </View>
+            {data.visuals && (
+              <View style={styles.visualsList}>
+                {data.visuals.map((v) => (
+                  <View key={v} style={styles.visualPlaceholder}>
+                    <Text style={styles.visualPlaceholderText}>{v}</Text>
+                  </View>
+                ))}
+              </View>
+            )}
+          </>
+        )}
+
+        {data.action === 'summarize' && (
+          <>
+            <Text style={styles.panelLabel}>Summary</Text>
+            <View style={styles.panelResultBlock}>
+              <Text style={styles.panelResultText}>{data.result}</Text>
+              {data.bullets && (
+                <View style={styles.bulletList}>
+                  {data.bullets.map((b) => (
+                    <View key={b} style={styles.bulletRow}>
+                      <Text style={styles.bulletDot}>•</Text>
+                      <Text style={styles.bulletText}>{b}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          </>
+        )}
+      </ScrollView>
+
+      <View style={styles.panelActions}>
+        {isAlreadyApplied ? (
+          <View style={styles.appliedIndicator}>
+            <Ionicons name="checkmark-circle" size={20} color={colors.primary} />
+            <Text style={styles.appliedText}>Applied</Text>
+          </View>
+        ) : (
+          <Pressable style={styles.applyBtn} onPress={onApply}>
+            <Ionicons name="checkmark" size={20} color={colors.surface} />
+            <Text style={styles.applyBtnText}>Apply</Text>
+          </Pressable>
+        )}
+        <Pressable style={styles.retryBtn}>
+          <Ionicons name="refresh" size={18} color={colors.textSecondary} />
+        </Pressable>
+        <Pressable style={styles.editBtn}>
+          <Ionicons name="create-outline" size={18} color={colors.textSecondary} />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main screen
 // ---------------------------------------------------------------------------
 
+// Source image aspect ratio (from the PDF render: roughly 595 × 842)
 const IMAGE_ASPECT = 595 / 842;
 
 export default function WorksheetViewScreen() {
@@ -275,24 +396,26 @@ export default function WorksheetViewScreen() {
   const [selectedZone, setSelectedZone] = useState<string | null>(null);
   const [currentAction, setCurrentAction] = useState<ToolbarAction>('simplify');
   const [showToolbar, setShowToolbar] = useState(false);
+  const [showPanel, setShowPanel] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  // Store multiple adaptations per zone: zoneId -> { action -> Adaptation }
-  const [adaptedZones, setAdaptedZones] = useState<Record<string, Record<ToolbarAction, Adaptation>>>({});
-  const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
-
-  // Preview modal state
-  const [showPreview, setShowPreview] = useState(false);
+  const [adaptedZones, setAdaptedZones] = useState<Record<string, Adaptation>>({});
   const [previewAdaptation, setPreviewAdaptation] = useState<Adaptation | null>(null);
+
+  const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
 
   const currentPage = PAGES[pageIndex];
   const totalPages = PAGES.length;
 
   const goToPage = (idx: number) => {
+    // Dismiss any open panel/toolbar when switching pages
     setSelectedZone(null);
     setShowToolbar(false);
+    setShowPanel(false);
+    setPreviewAdaptation(null);
     setPageIndex(idx);
   };
 
+  const panelAnim = useRef(new Animated.Value(0)).current;
   const toolbarAnim = useRef(new Animated.Value(0)).current;
   const toastAnim = useRef(new Animated.Value(0)).current;
 
@@ -305,6 +428,15 @@ export default function WorksheetViewScreen() {
     }).start();
   }, [showToolbar]);
 
+  useEffect(() => {
+    Animated.spring(panelAnim, {
+      toValue: showPanel ? 1 : 0,
+      useNativeDriver: true,
+      tension: 50,
+      friction: 12,
+    }).start();
+  }, [showPanel]);
+
   const handleImageLayout = (e: LayoutChangeEvent) => {
     const { width } = e.nativeEvent.layout;
     setImageSize({ width, height: width / IMAGE_ASPECT });
@@ -312,12 +444,21 @@ export default function WorksheetViewScreen() {
 
   const handleZoneTap = (id: string) => {
     if (selectedZone === id) {
-      // Clicking same zone again - toggle toolbar
-      setShowToolbar(!showToolbar);
+      setSelectedZone(null);
+      setShowToolbar(false);
+      setShowPanel(false);
+      setPreviewAdaptation(null);
     } else {
-      // Clicking different zone - always show toolbar
       setSelectedZone(id);
-      setShowToolbar(true);
+      if (adaptedZones[id]) {
+        setPreviewAdaptation(adaptedZones[id]);
+        setShowToolbar(false);
+        setShowPanel(true);
+      } else {
+        setPreviewAdaptation(null);
+        setShowToolbar(true);
+        setShowPanel(false);
+      }
     }
   };
 
@@ -330,6 +471,7 @@ export default function WorksheetViewScreen() {
       selectedZone && MOCK_RESULTS[selectedZone]
         ? MOCK_RESULTS[selectedZone][action]
         : null;
+    setPreviewAdaptation(result);
 
     Animated.sequence([
       Animated.timing(toastAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
@@ -337,76 +479,33 @@ export default function WorksheetViewScreen() {
       Animated.timing(toastAnim, { toValue: 0, duration: 200, useNativeDriver: true }),
     ]).start(() => {
       setIsProcessing(false);
-      if (result) {
-        // Show preview modal instead of directly applying
-        setPreviewAdaptation(result);
-        setShowPreview(true);
-      }
+      setShowPanel(true);
     });
   };
 
-  const handleApplyAdaptation = () => {
+  const handleApply = () => {
     if (selectedZone && previewAdaptation) {
-      setAdaptedZones((prev) => ({
-        ...prev,
-        [selectedZone]: {
-          ...(prev[selectedZone] || {}),
-          [currentAction]: previewAdaptation,
-        },
-      }));
+      setAdaptedZones((prev) => ({ ...prev, [selectedZone]: previewAdaptation }));
     }
-    setShowPreview(false);
+    setShowPanel(false);
+    setSelectedZone(null);
     setPreviewAdaptation(null);
-    setShowToolbar(true);
   };
 
-  const handleRegenerateAdaptation = () => {
-    // In a real app, this would call the API again
-    // For now, just close and show the toolbar again
-    setShowPreview(false);
+  const handleDismissPanel = () => {
+    setShowPanel(false);
+    setSelectedZone(null);
     setPreviewAdaptation(null);
-    setShowToolbar(true);
-    // Optionally: trigger handleAction again to "regenerate"
   };
 
-  const handleCancelPreview = () => {
-    setShowPreview(false);
-    setPreviewAdaptation(null);
-    setShowToolbar(true);
-  };
-
-  // Convert adaptedZones to markers - create one marker per zone per action
-  const markers: MarkerData[] = Object.entries(adaptedZones)
-    .flatMap(([zoneId, adaptations]) => {
-      const zone = currentPage.zones.find((z) => z.id === zoneId);
-      if (!zone) return [];
-
-      // Create a marker for each adaptation type
-      return Object.values(adaptations).map((adaptation, index) => ({
-        id: `${zoneId}-${adaptation.action}`,
-        type: adaptation.action,
-        label: zone.label,
-        position: {
-          // Offset markers slightly if multiple adaptations exist
-          x: zone.rect.left + zone.rect.width / 2 + (index * 3),
-          y: zone.rect.top + zone.rect.height / 2 + (index * 3),
-        },
-        content: {
-          original: adaptation.original,
-          result: adaptation.result,
-          keywords: adaptation.keywords,
-          bullets: adaptation.bullets,
-          visuals: adaptation.visuals,
-        },
-      }));
-    });
+  const panelWidth = 300;
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScreenHeader title="The Water Cycle" />
 
       <View style={styles.content}>
-        {/* Main worksheet area */}
+        {/* Left: Worksheet image with overlay zones */}
         <View style={styles.worksheetArea}>
           {/* Page navigation bar */}
           <View style={styles.pageNav}>
@@ -423,15 +522,16 @@ export default function WorksheetViewScreen() {
             </Pressable>
 
             <View style={styles.pageIndicator}>
-              {PAGES.map((_p, i) => (
+              {PAGES.map((p, i) => (
                 <Pressable key={i} onPress={() => goToPage(i)} style={styles.pageDotWrap}>
                   <View style={[styles.pageDot, i === pageIndex && styles.pageDotActive]} />
-                  {i < PAGES.length - 1 && (
-                    <View style={[styles.pageDash, i < pageIndex && styles.pageDashDone]} />
-                  )}
+                  <Text
+                    style={[styles.pageDotLabel, i === pageIndex && styles.pageDotLabelActive]}
+                  >
+                    {p.label}
+                  </Text>
                 </Pressable>
               ))}
-              <Text style={styles.pageLabel}>{pageIndex + 1} / {totalPages}</Text>
             </View>
 
             <Pressable
@@ -469,7 +569,7 @@ export default function WorksheetViewScreen() {
                 resizeMode="contain"
               />
 
-              {/* Tappable overlay zones */}
+              {/* Tappable overlay zones for the current page */}
               {imageSize.width > 0 &&
                 currentPage.zones.map((zone) => {
                   const isSelected = selectedZone === zone.id;
@@ -486,31 +586,57 @@ export default function WorksheetViewScreen() {
                           height: `${zone.rect.height}%`,
                         },
                         isSelected && styles.zoneSelected,
+                        isAdapted && !isSelected && styles.zoneAdapted,
                       ]}
                       onPress={() => handleZoneTap(zone.id)}
-                    />
+                    >
+                      {isAdapted && !isSelected && (
+                        <View style={styles.zoneBadge}>
+                          <Ionicons
+                            name={ACTION_META[adaptedZones[zone.id].action].icon}
+                            size={12}
+                            color={colors.surface}
+                          />
+                        </View>
+                      )}
+                    </Pressable>
                   );
                 })}
-
-              {/* Floating markers for adapted zones */}
-              {imageSize.width > 0 &&
-                markers.map((marker) => (
-                  <FloatingMarker
-                    key={marker.id}
-                    marker={marker}
-                    worksheetWidth={imageSize.width}
-                    worksheetHeight={imageSize.height}
-                  />
-                ))}
             </View>
           </ScrollView>
         </View>
+
+        {/* Right: Side panel */}
+        <Animated.View
+          style={[
+            styles.sidePanel,
+            {
+              width: panelWidth,
+              transform: [
+                {
+                  translateX: panelAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [panelWidth + spacing.pagePadding, 0],
+                  }),
+                },
+              ],
+            },
+          ]}
+          pointerEvents={showPanel ? 'auto' : 'none'}
+        >
+          <PanelContent
+            data={previewAdaptation}
+            isAlreadyApplied={!!(selectedZone && adaptedZones[selectedZone])}
+            onApply={handleApply}
+            onDismiss={handleDismissPanel}
+          />
+        </Animated.View>
       </View>
 
-      {/* Floating action toolbar for zone adaptations */}
+      {/* Floating toolbar */}
       <Animated.View
         style={[
-          styles.actionToolbar,
+          styles.toolbar,
           {
             opacity: toolbarAnim,
             transform: [
@@ -521,49 +647,19 @@ export default function WorksheetViewScreen() {
         ]}
         pointerEvents={showToolbar ? 'auto' : 'none'}
       >
-        <Pressable
-          style={[
-            styles.actionToolbarItem,
-            selectedZone && adaptedZones[selectedZone]?.simplify && styles.actionToolbarItemDisabled
-          ]}
-          onPress={() => handleAction('simplify')}
-          disabled={!!(selectedZone && adaptedZones[selectedZone]?.simplify)}
-        >
+        <Pressable style={styles.toolbarItem} onPress={() => handleAction('simplify')}>
           <Ionicons name="text" size={20} color={colors.surface} />
-          <Text style={styles.actionToolbarLabel}>Simplify</Text>
-          {selectedZone && adaptedZones[selectedZone]?.simplify && (
-            <Ionicons name="checkmark-circle" size={16} color={colors.surface} />
-          )}
+          <Text style={styles.toolbarLabel}>Simplify</Text>
         </Pressable>
-        <View style={styles.actionToolbarDivider} />
-        <Pressable
-          style={[
-            styles.actionToolbarItem,
-            selectedZone && adaptedZones[selectedZone]?.visuals && styles.actionToolbarItemDisabled
-          ]}
-          onPress={() => handleAction('visuals')}
-          disabled={!!(selectedZone && adaptedZones[selectedZone]?.visuals)}
-        >
+        <View style={styles.toolbarDivider} />
+        <Pressable style={styles.toolbarItem} onPress={() => handleAction('visuals')}>
           <Ionicons name="image" size={20} color={colors.surface} />
-          <Text style={styles.actionToolbarLabel}>Add Visuals</Text>
-          {selectedZone && adaptedZones[selectedZone]?.visuals && (
-            <Ionicons name="checkmark-circle" size={16} color={colors.surface} />
-          )}
+          <Text style={styles.toolbarLabel}>Add Visuals</Text>
         </Pressable>
-        <View style={styles.actionToolbarDivider} />
-        <Pressable
-          style={[
-            styles.actionToolbarItem,
-            selectedZone && adaptedZones[selectedZone]?.summarize && styles.actionToolbarItemDisabled
-          ]}
-          onPress={() => handleAction('summarize')}
-          disabled={!!(selectedZone && adaptedZones[selectedZone]?.summarize)}
-        >
+        <View style={styles.toolbarDivider} />
+        <Pressable style={styles.toolbarItem} onPress={() => handleAction('summarize')}>
           <Ionicons name="list" size={20} color={colors.surface} />
-          <Text style={styles.actionToolbarLabel}>Summarize</Text>
-          {selectedZone && adaptedZones[selectedZone]?.summarize && (
-            <Ionicons name="checkmark-circle" size={16} color={colors.surface} />
-          )}
+          <Text style={styles.toolbarLabel}>Summarize</Text>
         </Pressable>
       </Animated.View>
 
@@ -577,26 +673,45 @@ export default function WorksheetViewScreen() {
       <View style={styles.hintBar}>
         <Ionicons name="finger-print" size={16} color={colors.textSecondary} />
         <Text style={styles.hintText}>
-          Tap zones to adapt • Tap markers to view details
+          Tap any section on the worksheet, then choose an action
         </Text>
       </View>
 
-      {/* Bottom action button */}
-      <Pressable
-        style={styles.fab}
-        onPress={() => {
-          // Check if there are any adaptations
-          if (Object.keys(adaptedZones).length === 0) {
-            alert('Please adapt at least one section before handing to student.');
-            return;
-          }
+      {/* Bottom action buttons */}
+      <View style={styles.fabRow}>
+        <Pressable
+          style={styles.fabSecondary}
+          onPress={() => {
+            const zoneLabelMap: Record<string, string> = {};
+            PAGES.forEach((p) => p.zones.forEach((z) => { zoneLabelMap[z.id] = z.label; }));
 
-          const zoneLabelMap: Record<string, string> = {};
-          PAGES.forEach((p) => p.zones.forEach((z) => { zoneLabelMap[z.id] = z.label; }));
+            const summaries: AdaptationSummary[] = Object.entries(adaptedZones).map(
+              ([zoneId, adapt]) => ({
+                zoneId,
+                zoneLabel: zoneLabelMap[zoneId] ?? zoneId,
+                action: adapt.action,
+                original: adapt.original,
+                result: adapt.result,
+              }),
+            );
+            navigation.navigate('Export', {
+              title: 'The Water Cycle',
+              adaptations: summaries,
+            });
+          }}
+        >
+          <Ionicons name="download-outline" size={20} color={colors.primary} />
+          <Text style={styles.fabSecondaryText}>Export</Text>
+        </Pressable>
 
-          const adapted: AdaptedZone[] = Object.entries(adaptedZones).flatMap(
-            ([zoneId, adaptations]) =>
-              Object.values(adaptations).map((adapt) => ({
+        <Pressable
+          style={styles.fab}
+          onPress={() => {
+            const zoneLabelMap: Record<string, string> = {};
+            PAGES.forEach((p) => p.zones.forEach((z) => { zoneLabelMap[z.id] = z.label; }));
+
+            const adapted: AdaptedZone[] = Object.entries(adaptedZones).map(
+              ([zoneId, adapt]) => ({
                 zoneId,
                 zoneLabel: zoneLabelMap[zoneId] ?? zoneId,
                 action: adapt.action,
@@ -605,32 +720,18 @@ export default function WorksheetViewScreen() {
                 keywords: adapt.keywords,
                 bullets: adapt.bullets,
                 visuals: adapt.visuals,
-              })),
-          );
-
-          navigation.navigate('StudentView', {
-            title: 'The Water Cycle',
-            adaptations: adapted,
-          });
-        }}
-      >
-        <Ionicons name="school" size={20} color={colors.surface} />
-        <Text style={styles.fabText}>Hand to Student</Text>
-      </Pressable>
-
-      {/* Preview Modal */}
-      <AdaptationPreviewModal
-        visible={showPreview}
-        zoneLabel={
-          selectedZone
-            ? currentPage.zones.find((z) => z.id === selectedZone)?.label ?? selectedZone
-            : ''
-        }
-        adaptation={previewAdaptation}
-        onApply={handleApplyAdaptation}
-        onRegenerate={handleRegenerateAdaptation}
-        onCancel={handleCancelPreview}
-      />
+              }),
+            );
+            navigation.navigate('StudentView', {
+              title: 'The Water Cycle',
+              adaptations: adapted,
+            });
+          }}
+        >
+          <Ionicons name="school" size={20} color={colors.surface} />
+          <Text style={styles.fabText}>Hand to Student</Text>
+        </Pressable>
+      </View>
     </SafeAreaView>
   );
 }
@@ -645,7 +746,8 @@ const styles = StyleSheet.create({
   // Worksheet image area
   worksheetArea: {
     flex: 1,
-    paddingHorizontal: spacing.pagePadding,
+    paddingLeft: spacing.pagePadding,
+    paddingRight: spacing.innerGap,
   },
   // Page navigation
   pageNav: {
@@ -669,35 +771,29 @@ const styles = StyleSheet.create({
   pageIndicator: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 0,
+    gap: spacing.innerGap,
   },
   pageDotWrap: {
-    flexDirection: 'row',
     alignItems: 'center',
+    gap: 4,
   },
   pageDot: {
-    width: 10,
-    height: 10,
+    width: 8,
+    height: 8,
     borderRadius: radii.circle,
     backgroundColor: colors.surfaceMuted,
   },
   pageDotActive: {
     backgroundColor: colors.primary,
-    width: 12,
-    height: 12,
+    width: 10,
+    height: 10,
   },
-  pageDash: {
-    width: 24,
-    height: 2,
-    backgroundColor: colors.surfaceMuted,
-  },
-  pageDashDone: {
-    backgroundColor: colors.primary,
-  },
-  pageLabel: {
-    ...typography.caption,
+  pageDotLabel: {
+    ...typography.micro,
     color: colors.textSecondary,
-    marginLeft: spacing.innerGapSmall,
+  },
+  pageDotLabelActive: {
+    color: colors.primary,
   },
 
   worksheetScroll: { flex: 1 },
@@ -719,9 +815,158 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
     backgroundColor: `${colors.primary}20`,
   },
+  zoneAdapted: {
+    backgroundColor: `${colors.primary}15`,
+    borderColor: `${colors.primary}40`,
+  },
+  zoneBadge: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    backgroundColor: colors.primary,
+    borderRadius: radii.circle,
+    width: 22,
+    height: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
-  // Action toolbar (for zone adaptations)
-  actionToolbar: {
+  // Side panel
+  sidePanel: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    paddingRight: spacing.pagePadding,
+    paddingVertical: spacing.innerGapSmall,
+  },
+  panelInner: {
+    flex: 1,
+    backgroundColor: colors.surface,
+    borderRadius: radii.card,
+    padding: spacing.innerGap,
+    ...shadows.modalSheet,
+  },
+  panelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.innerGap,
+  },
+  panelTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.innerGapSmall,
+  },
+  panelTitle: { ...typography.cardTitle, color: colors.textPrimary },
+  panelClose: {
+    width: 32,
+    height: 32,
+    borderRadius: radii.circle,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  panelScroll: { flex: 1 },
+  panelLabel: {
+    ...typography.overline,
+    color: colors.textSecondary,
+    marginBottom: spacing.innerGapSmall,
+  },
+  panelTextBlock: {
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radii.chip,
+    padding: spacing.innerGap,
+    marginBottom: spacing.innerGap,
+  },
+  panelOriginalText: { ...typography.bodySmall, color: colors.textSecondary },
+  arrowRow: { alignItems: 'center', marginBottom: spacing.innerGap },
+  panelResultBlock: {
+    backgroundColor: colors.primaryLight,
+    borderRadius: radii.chip,
+    padding: spacing.innerGap,
+    marginBottom: spacing.innerGap,
+  },
+  panelResultText: { ...typography.body, color: colors.textPrimary },
+
+  // Keywords
+  keywordsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.innerGapSmall,
+    marginBottom: spacing.innerGap,
+  },
+  keywordChip: {
+    backgroundColor: colors.primaryLight,
+    borderRadius: radii.circle,
+    paddingHorizontal: spacing.innerGap,
+    paddingVertical: 6,
+  },
+  keywordText: { ...typography.caption, color: colors.primary },
+
+  // Visuals
+  visualsList: { gap: spacing.innerGapSmall, marginBottom: spacing.innerGap },
+  visualPlaceholder: {
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radii.chip,
+    padding: spacing.innerGap,
+    alignItems: 'center',
+  },
+  visualPlaceholderText: { ...typography.bodySmall, color: colors.textSecondary },
+
+  // Bullets
+  bulletList: { marginTop: spacing.innerGapSmall, gap: spacing.innerGapSmall },
+  bulletRow: { flexDirection: 'row', gap: spacing.innerGapSmall },
+  bulletDot: { ...typography.body, color: colors.primary },
+  bulletText: { ...typography.body, color: colors.textPrimary, flex: 1 },
+
+  // Panel actions
+  panelActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.innerGapSmall,
+    paddingTop: spacing.innerGap,
+    borderTopWidth: 1,
+    borderTopColor: colors.surfaceMuted,
+  },
+  applyBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.primary,
+    borderRadius: radii.chip,
+    paddingVertical: spacing.innerGapSmall,
+    gap: spacing.innerGapSmall,
+  },
+  applyBtnText: { ...typography.cardTitle, color: colors.surface },
+  appliedIndicator: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.innerGapSmall,
+  },
+  appliedText: { ...typography.cardTitle, color: colors.primary },
+  retryBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: radii.chip,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: radii.chip,
+    backgroundColor: colors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Floating toolbar
+  toolbar: {
     position: 'absolute',
     bottom: 100,
     alignSelf: 'center',
@@ -733,18 +978,15 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.innerGapSmall,
     ...shadows.floatingToolbar,
   },
-  actionToolbarItem: {
+  toolbarItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.innerGapSmall,
     paddingHorizontal: spacing.innerGap,
     paddingVertical: spacing.innerGapSmall,
   },
-  actionToolbarItemDisabled: {
-    opacity: 0.5,
-  },
-  actionToolbarLabel: { ...typography.bodySmall, color: colors.surface },
-  actionToolbarDivider: { width: 1, height: 20, backgroundColor: '#FFFFFF33' },
+  toolbarLabel: { ...typography.bodySmall, color: colors.surface },
+  toolbarDivider: { width: 1, height: 20, backgroundColor: '#FFFFFF33' },
 
   // Toast
   toast: {
@@ -773,11 +1015,28 @@ const styles = StyleSheet.create({
   },
   hintText: { ...typography.caption, color: colors.textSecondary },
 
-  // FAB
-  fab: {
+  // FAB row
+  fabRow: {
     position: 'absolute',
     bottom: 56,
-    alignSelf: 'center',
+    left: spacing.pagePadding,
+    flexDirection: 'row',
+    gap: spacing.innerGapSmall,
+  },
+  fabSecondary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radii.circle,
+    paddingHorizontal: spacing.innerGap,
+    paddingVertical: spacing.innerGapSmall,
+    gap: spacing.innerGapSmall,
+    borderWidth: 1,
+    borderColor: colors.surfaceMuted,
+    ...shadows.floatingToolbar,
+  },
+  fabSecondaryText: { ...typography.cardTitle, color: colors.primary },
+  fab: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.primary,

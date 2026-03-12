@@ -13,6 +13,5 @@
     "dev": "concurrently \"npm run app\" \"npm run server\""
   },
   "dependencies": {
-    "expo-splash-screen": "~55.0.10"
   }
 }
