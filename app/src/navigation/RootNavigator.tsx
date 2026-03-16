@@ -2,6 +2,8 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { RootStackParamList } from './types';
 import HomeScreen from '../screens/HomeScreen';
 import WorksheetViewScreen from '../screens/WorksheetViewScreen';
+import ProcessScreen from '../screens/ProcessScreen';
+import ReviewScreen from '../screens/ReviewScreen';
 import StudentViewScreen from '../screens/StudentViewScreen';
 import ExportScreen from '../screens/ExportScreen';
 
@@ -16,6 +18,8 @@ export default function RootNavigator() {
       }}
     >
       <Stack.Screen name="Home" component={HomeScreen} />
+      <Stack.Screen name="Process" component={ProcessScreen} />
+      <Stack.Screen name="Review" component={ReviewScreen} />
       <Stack.Screen name="WorksheetView" component={WorksheetViewScreen} />
       <Stack.Screen name="StudentView" component={StudentViewScreen} />
       <Stack.Screen name="Export" component={ExportScreen} />

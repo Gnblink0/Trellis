@@ -1,8 +1,9 @@
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { colors, typography, spacing, radii } from '../theme';
 import { RootStackParamList } from '../navigation/types';
 
@@ -10,6 +11,37 @@ type Nav = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
 export default function HomeScreen() {
   const navigation = useNavigation<Nav>();
+
+  const handleScanWorksheet = async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+    });
+
+    if (result.canceled || !result.assets?.[0]) return;
+
+    navigation.navigate('Process', { imageUri: result.assets[0].uri });
+  };
+
+  const handleTakePhoto = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== 'granted') {
+      Alert.alert(
+        'Camera Permission',
+        'Camera permission is needed to take worksheet photos.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      quality: 0.8,
+    });
+
+    if (result.canceled || !result.assets?.[0]) return;
+
+    navigation.navigate('Process', { imageUri: result.assets[0].uri });
+  };
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -38,12 +70,21 @@ export default function HomeScreen() {
         {/* Camera CTA */}
         <Pressable
           style={styles.cameraCta}
-          onPress={() => navigation.navigate('WorksheetView')}
+          onPress={handleTakePhoto}
         >
           <View style={styles.cameraIconCircle}>
             <Ionicons name="camera" size={32} color={colors.surface} />
           </View>
-          <Text style={styles.cameraLabel}>Tap to take a photo</Text>
+          <Text style={styles.cameraLabel}>Take a photo</Text>
+        </Pressable>
+
+        {/* Gallery CTA */}
+        <Pressable
+          style={styles.galleryCta}
+          onPress={handleScanWorksheet}
+        >
+          <Ionicons name="images-outline" size={20} color={colors.primary} />
+          <Text style={styles.galleryLabel}>Choose from library</Text>
         </Pressable>
 
         {/* Recent Worksheets */}
@@ -161,6 +202,20 @@ const styles = StyleSheet.create({
   cameraLabel: {
     ...typography.bodySmall,
     color: colors.textSecondary,
+  },
+
+  // Gallery CTA
+  galleryCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.innerGapSmall,
+    marginTop: spacing.innerGapSmall,
+    paddingVertical: spacing.innerGapSmall,
+  },
+  galleryLabel: {
+    ...typography.bodySmall,
+    color: colors.primary,
   },
 
   // Section

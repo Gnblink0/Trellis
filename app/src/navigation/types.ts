@@ -1,3 +1,7 @@
+import type { AdaptedBlock, ProcessResponse } from '@trellis/shared';
+
+// ── Legacy types (used by WorksheetViewScreen, StudentViewScreen, ExportScreen) ──
+
 export type AdaptationSummary = {
   zoneId: string;
   zoneLabel: string;
@@ -17,9 +21,16 @@ export type AdaptedZone = {
   visuals?: string[];
 };
 
+// ── Navigation param list ──
+
 export type RootStackParamList = {
   Home: undefined;
   WorksheetView: undefined;
+  Process: { imageUri: string };
+  Review: { response: ProcessResponse; imageUri: string };
   StudentView: { title: string; adaptations: AdaptedZone[] } | undefined;
   Export: { title: string; adaptations: AdaptationSummary[] } | undefined;
 };
+
+// Re-export shared types for convenience
+export type { AdaptedBlock, ProcessResponse } from '@trellis/shared';
