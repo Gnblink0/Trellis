@@ -73,9 +73,15 @@ export default function ProcessScreen() {
       );
 
       // 2. Read as base64
-      const base64 = await FileSystem.readAsStringAsync(manipulated.uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      // On web, manipulateAsync already returns a data: URI; on native it returns a file: URI
+      let base64: string;
+      if (manipulated.uri.startsWith('data:')) {
+        base64 = manipulated.uri.split(',')[1];
+      } else {
+        base64 = await FileSystem.readAsStringAsync(manipulated.uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+      }
 
       // 3. Check size (4MB limit)
       if (base64.length > 4 * 1024 * 1024) {
