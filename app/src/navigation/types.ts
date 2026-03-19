@@ -29,7 +29,7 @@ export type RootStackParamList = {
   WorksheetView: undefined;
   Process: { imageUri: string };
   Review: { response: ProcessResponse; imageUri: string };
-  StudentView: { title: string; adaptations: AdaptedZone[] } | undefined;
+  StudentView: { title: string; adaptations: AdaptedZone[]; imageUri?: string } | undefined;
   Export: { title: string; adaptations: AdaptationSummary[] } | undefined;
 };
 

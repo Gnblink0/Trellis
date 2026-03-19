@@ -77,6 +77,7 @@ export default function StudentViewScreen() {
 
   const title = route.params?.title ?? 'Worksheet';
   const adaptations = route.params?.adaptations ?? [];
+  const imageUri = route.params?.imageUri;
 
   const [pageIndex, setPageIndex] = useState(0);
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
@@ -119,17 +120,21 @@ export default function StudentViewScreen() {
     pageIndex === 0
       ? adaptations.map((a, index) => {
           const zoneRect = ZONE_POSITIONS[a.zoneId];
+          // AI pipeline: no hardcoded zone coords → distribute evenly along right edge
           const basePosition = zoneRect
             ? {
                 x: zoneRect.left + zoneRect.width / 2,
                 y: zoneRect.top + zoneRect.height / 2,
               }
-            : { x: 50, y: 20 + index * 15 };
+            : {
+                x: 92,
+                y: Math.round((index + 0.5) * (100 / adaptations.length)),
+              };
 
-          // Offset slightly for multiple markers on same zone
-          const sameZoneIndex = adaptations
-            .slice(0, index)
-            .filter((prev) => prev.zoneId === a.zoneId).length;
+          // Offset slightly for multiple markers on same zone (legacy path only)
+          const sameZoneIndex = zoneRect
+            ? adaptations.slice(0, index).filter((prev) => prev.zoneId === a.zoneId).length
+            : 0;
 
           return {
             id: `${a.zoneId}-${a.action}`,
@@ -266,7 +271,8 @@ export default function StudentViewScreen() {
       <View style={styles.content}>
         {/* Worksheet area */}
         <View style={styles.worksheetArea}>
-          {/* Page nav */}
+          {/* Page nav — only shown for legacy mock worksheets */}
+          {!imageUri && (
           <View style={styles.pageNav}>
             <Pressable
               onPress={() => goToPage(pageIndex - 1)}
@@ -307,6 +313,7 @@ export default function StudentViewScreen() {
               />
             </Pressable>
           </View>
+          )}
 
           <ScrollView
             style={styles.worksheetScroll}
@@ -320,7 +327,12 @@ export default function StudentViewScreen() {
               onLayout={exportMode ? () => handleExportCapture() : undefined}
             >
               {exportMode ? (
-                /* Export mode: render ALL pages stacked */
+                /* Export mode: render page(s) for capture */
+                imageUri ? (
+                  <View style={styles.imageWrapper}>
+                    <Image source={{ uri: imageUri }} style={styles.worksheetImage} resizeMode="contain" />
+                  </View>
+                ) : (
                 PAGES.map((page, pi) => (
                   <View key={pi} style={styles.imageWrapper}>
                     <Image
@@ -330,11 +342,12 @@ export default function StudentViewScreen() {
                     />
                   </View>
                 ))
+                )
               ) : (
                 /* Normal mode: single page with interactivity */
                 <View style={styles.imageWrapper} onLayout={handleImageLayout}>
                   <Image
-                    source={currentPage.image}
+                    source={imageUri ? { uri: imageUri } : currentPage.image}
                     style={[
                       styles.worksheetImage,
                       imageSize.height > 0 && { height: imageSize.height },
@@ -353,8 +366,8 @@ export default function StudentViewScreen() {
                       />
                     ))}
 
-                  {/* Input zones for question pages */}
-                  {imageSize.width > 0 &&
+                  {/* Input zones — only for legacy mock worksheets */}
+                  {!imageUri && imageSize.width > 0 &&
                     currentPage.inputZones?.map((zone) => (
                       <TextInput
                         key={zone.id}

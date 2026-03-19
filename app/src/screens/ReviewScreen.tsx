@@ -138,6 +138,7 @@ export default function ReviewScreen() {
     navigation.navigate('StudentView', {
       title: 'Adapted Worksheet',
       adaptations,
+      imageUri,
     });
   };
 
