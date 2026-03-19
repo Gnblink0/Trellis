@@ -20,6 +20,12 @@ import ScreenHeader from '../components/ScreenHeader';
 import DrawingCanvas, { DrawingTool, DrawingData } from '../components/DrawingCanvas';
 import DrawingToolbar from '../components/DrawingToolbar';
 import FloatingMarker, { MarkerData } from '../components/FloatingMarker';
+import SelectableOCRImage, {
+  type SelectionChangePayload,
+} from '../components/SelectableOCRImage';
+import SelectionActionBubble from '../components/SelectionActionBubble';
+import { processSelectedText } from '../services/adaptApi';
+import type { SelectedSimplifyLevel } from '@trellis/shared';
 
 // Native-only imports (ViewShot, MediaLibrary, Sharing)
 let ViewShot: any = View; // fallback to View on web
@@ -76,11 +82,12 @@ export default function StudentViewScreen() {
   const route = useRoute<Route>();
 
   const title = route.params?.title ?? 'Worksheet';
-  const adaptations = route.params?.adaptations ?? [];
+  const initialAdaptations = route.params?.adaptations ?? [];
   const imageUri = route.params?.imageUri;
 
   const [pageIndex, setPageIndex] = useState(0);
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
+  const [adaptationsState, setAdaptationsState] = useState<AdaptedZone[]>(initialAdaptations);
   const [answers, setAnswers] = useState<Record<string, string>>({});
 
   // Drawing state
@@ -105,6 +112,203 @@ export default function StudentViewScreen() {
     setImageSize({ width, height: width / IMAGE_ASPECT });
   };
 
+  type BubbleAction = 'simplify' | 'summarize' | 'visuals';
+  type BubbleResult =
+    | { action: 'simplify'; simplifiedText: string }
+    | { action: 'summarize'; sentences: string[] }
+    | { action: 'visuals'; visualHint: string; visualUrl: string | null };
+
+  const [selectionState, setSelectionState] = useState<{
+    selectedText: string;
+    selectionRect: SelectionChangePayload['selectionRect'];
+    selectionRectPercent: { top: number; left: number; width: number; height: number };
+  } | null>(null);
+
+  const [bubblePosition, setBubblePosition] = useState<{ x: number; y: number } | null>(null);
+  const [loadingActions, setLoadingActions] = useState<Partial<Record<BubbleAction, boolean>>>({});
+  const [bubbleResult, setBubbleResult] = useState<BubbleResult | null>(null);
+
+  const handleSelectionChange = (payload: SelectionChangePayload) => {
+    const selectedText = payload.selectedText?.trim() ?? '';
+    if (!selectedText) {
+      setSelectionState(null);
+      setBubblePosition(null);
+      setBubbleResult(null);
+      return;
+    }
+
+    // Until we know the rendered worksheet size, keep selection but postpone positioning.
+    if (imageSize.width <= 0 || imageSize.height <= 0) {
+      setSelectionState({
+        selectedText,
+        selectionRect: payload.selectionRect,
+        selectionRectPercent: { top: 0, left: 0, width: 0, height: 0 },
+      });
+      setBubblePosition(null);
+      return;
+    }
+
+    const { x, y, width, height } = payload.selectionRect;
+    const selectionRectPercent = {
+      top: (y / imageSize.height) * 100,
+      left: (x / imageSize.width) * 100,
+      width: (width / imageSize.width) * 100,
+      height: (height / imageSize.height) * 100,
+    };
+
+    const centerX = x + width / 2;
+    const bubbleWidthPx = imageSize.width * 0.85; // matches SelectionActionBubble width: '85%'
+    const bubbleLeft = Math.max(0, Math.min(centerX - bubbleWidthPx / 2, imageSize.width - bubbleWidthPx));
+    const bubbleTop = Math.max(0, y - spacing.innerGapSmall);
+
+    setSelectionState({
+      selectedText,
+      selectionRect: payload.selectionRect,
+      selectionRectPercent,
+    });
+    setBubblePosition({ x: bubbleLeft, y: bubbleTop });
+  };
+
+  const persistSelectedAdaptation = (zone: AdaptedZone) => {
+    setAdaptationsState((prev) => [...prev, zone]);
+  };
+
+  const buildSelectionZoneLabel = (text: string) => {
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    const maxLen = 32;
+    return normalized.length > maxLen ? `${normalized.slice(0, maxLen)}…` : normalized;
+  };
+
+  const handleRequestSimplify = async (level: SelectedSimplifyLevel) => {
+    if (!selectionState) return;
+    setLoadingActions((prev) => ({ ...prev, simplify: true }));
+    setBubbleResult(null);
+
+    try {
+      const result = await processSelectedText({
+        selectedText: selectionState.selectedText,
+        action: 'simplify',
+        simplifyLevel: level,
+        language: 'en',
+      });
+
+      if (!result.ok) {
+        Alert.alert('Processing Failed', result.error.message);
+        return;
+      }
+
+      const simplifiedText = result.data.result.simplifiedText;
+      const keywords = result.data.result.keywords;
+
+      setBubbleResult({
+        action: 'simplify',
+        simplifiedText,
+      });
+
+      persistSelectedAdaptation({
+        zoneId: `sel-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        zoneLabel: buildSelectionZoneLabel(selectionState.selectedText),
+        action: 'simplify',
+        original: selectionState.selectedText,
+        result: simplifiedText,
+        keywords,
+        rect: selectionState.selectionRectPercent,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unexpected error';
+      Alert.alert('Error', msg);
+    } finally {
+      setLoadingActions((prev) => ({ ...prev, simplify: false }));
+    }
+  };
+
+  const handleRequestSummarize = async () => {
+    if (!selectionState) return;
+    setLoadingActions((prev) => ({ ...prev, summarize: true }));
+    setBubbleResult(null);
+
+    try {
+      const result = await processSelectedText({
+        selectedText: selectionState.selectedText,
+        action: 'summarize',
+        summaryMaxSentences: 5,
+        language: 'en',
+      });
+
+      if (!result.ok) {
+        Alert.alert('Processing Failed', result.error.message);
+        return;
+      }
+
+      const sentences = result.data.result.sentences;
+      const firstSentence = sentences[0] ?? '';
+
+      setBubbleResult({
+        action: 'summarize',
+        sentences,
+      });
+
+      persistSelectedAdaptation({
+        zoneId: `sel-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        zoneLabel: buildSelectionZoneLabel(selectionState.selectedText),
+        action: 'summarize',
+        original: selectionState.selectedText,
+        result: firstSentence,
+        bullets: sentences,
+        rect: selectionState.selectionRectPercent,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unexpected error';
+      Alert.alert('Error', msg);
+    } finally {
+      setLoadingActions((prev) => ({ ...prev, summarize: false }));
+    }
+  };
+
+  const handleRequestVisuals = async () => {
+    if (!selectionState) return;
+    setLoadingActions((prev) => ({ ...prev, visuals: true }));
+    setBubbleResult(null);
+
+    try {
+      const result = await processSelectedText({
+        selectedText: selectionState.selectedText,
+        action: 'visuals',
+        language: 'en',
+      });
+
+      if (!result.ok) {
+        Alert.alert('Processing Failed', result.error.message);
+        return;
+      }
+
+      const visualHint = result.data.result.visualHint;
+      const visualUrl = result.data.result.visualUrl;
+
+      setBubbleResult({
+        action: 'visuals',
+        visualHint,
+        visualUrl,
+      });
+
+      persistSelectedAdaptation({
+        zoneId: `sel-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        zoneLabel: buildSelectionZoneLabel(selectionState.selectedText),
+        action: 'visuals',
+        original: selectionState.selectedText,
+        result: visualHint,
+        visualUrl: visualUrl ?? undefined,
+        visuals: visualHint ? [visualHint] : undefined,
+        rect: selectionState.selectionRectPercent,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unexpected error';
+      Alert.alert('Error', msg);
+    } finally {
+      setLoadingActions((prev) => ({ ...prev, visuals: false }));
+    }
+  };
+
   // Zone data from WorksheetViewScreen
   const ZONE_POSITIONS: Record<string, { top: number; left: number; width: number; height: number }> = {
     intro: { top: 5.5, left: 3, width: 94, height: 10 },
@@ -118,24 +322,24 @@ export default function StudentViewScreen() {
   // Convert adaptations to markers with proper positions
   const markers: MarkerData[] =
     pageIndex === 0
-      ? adaptations.map((a, index) => {
+      ? adaptationsState.map((a, index) => {
           const zoneRect = a.rect ?? ZONE_POSITIONS[a.zoneId];
-          // AI pipeline with rect: use exact GPT-4o coordinates (right edge of block)
-          // AI pipeline without rect: distribute evenly along right edge
-          // Legacy hardcoded zones: use zone center
           const basePosition = zoneRect
             ? {
-                x: 93,                                   // fixed right column, avoids overflow
-                y: zoneRect.top + zoneRect.height / 2,   // vertical center from GPT-4o rect
+                // Use block/selection rect center for stable positioning
+                x: zoneRect.left + zoneRect.width / 2,
+                y: zoneRect.top + zoneRect.height / 2,
               }
             : {
                 x: 93,
-                y: Math.round((index + 0.5) * (100 / adaptations.length)),
+                y: Math.round((index + 0.5) * (100 / adaptationsState.length)),
               };
 
           // Offset slightly for multiple markers on same zone (legacy path only)
           const sameZoneIndex = zoneRect
-            ? adaptations.slice(0, index).filter((prev) => prev.zoneId === a.zoneId).length
+            ? adaptationsState
+                .slice(0, index)
+                .filter((prev) => prev.zoneId === a.zoneId).length
             : 0;
 
           return {
@@ -263,7 +467,7 @@ export default function StudentViewScreen() {
       <View style={styles.banner}>
         <Ionicons name="school" size={16} color={colors.primary} />
         <Text style={styles.bannerText}>Student Mode</Text>
-        {adaptations.length > 0 && (
+        {adaptationsState.length > 0 && (
           <Text style={styles.bannerHint}>
             Tap green badges for hints • Use toolbar to annotate
           </Text>
@@ -331,8 +535,39 @@ export default function StudentViewScreen() {
               {exportMode ? (
                 /* Export mode: render page(s) for capture */
                 imageUri ? (
-                  <View style={styles.imageWrapper}>
-                    <Image source={{ uri: imageUri }} style={styles.worksheetImage} resizeMode="contain" />
+                  <View style={styles.imageWrapper} onLayout={handleImageLayout}>
+                    <Image
+                      source={{ uri: imageUri }}
+                      style={[
+                        styles.worksheetImage,
+                        imageSize.height > 0 && { height: imageSize.height },
+                      ]}
+                      resizeMode="contain"
+                    />
+
+                    {/* Floating markers for adaptations */}
+                    {imageSize.width > 0 &&
+                      markers.map((marker) => (
+                        <FloatingMarker
+                          key={marker.id}
+                          marker={marker}
+                          worksheetWidth={imageSize.width}
+                          worksheetHeight={imageSize.height}
+                        />
+                      ))}
+
+                    {/* Drawing canvas overlay */}
+                    {imageSize.width > 0 && (
+                      <DrawingCanvas
+                        width={imageSize.width}
+                        height={imageSize.height}
+                        tool={drawingTool}
+                        color={drawingColor}
+                        strokeWidth={strokeWidth}
+                        onDrawingChange={handleDrawingChange}
+                        initialData={drawingData}
+                      />
+                    )}
                   </View>
                 ) : (
                 PAGES.map((page, pi) => (
@@ -348,14 +583,25 @@ export default function StudentViewScreen() {
               ) : (
                 /* Normal mode: single page with interactivity */
                 <View style={styles.imageWrapper} onLayout={handleImageLayout}>
-                  <Image
-                    source={imageUri ? { uri: imageUri } : currentPage.image}
-                    style={[
-                      styles.worksheetImage,
-                      imageSize.height > 0 && { height: imageSize.height },
-                    ]}
-                    resizeMode="contain"
-                  />
+                  {imageUri ? (
+                    <SelectableOCRImage
+                      imageUri={imageUri}
+                      onSelectionChange={handleSelectionChange}
+                      style={[
+                        styles.worksheetImage,
+                        imageSize.height > 0 && { height: imageSize.height },
+                      ]}
+                    />
+                  ) : (
+                    <Image
+                      source={currentPage.image}
+                      style={[
+                        styles.worksheetImage,
+                        imageSize.height > 0 && { height: imageSize.height },
+                      ]}
+                      resizeMode="contain"
+                    />
+                  )}
 
                   {/* Floating markers for adaptations */}
                   {imageSize.width > 0 &&
@@ -402,6 +648,19 @@ export default function StudentViewScreen() {
                       strokeWidth={strokeWidth}
                       onDrawingChange={handleDrawingChange}
                       initialData={drawingData}
+                    />
+                  )}
+
+                  {/* Selection action bubble (iPad OCR selection) */}
+                  {imageUri && selectionState && bubblePosition && (
+                    <SelectionActionBubble
+                      visible={true}
+                      position={bubblePosition}
+                      onRequestSimplify={handleRequestSimplify}
+                      onRequestSummarize={handleRequestSummarize}
+                      onRequestVisuals={handleRequestVisuals}
+                      loadingActions={loadingActions}
+                      result={bubbleResult}
                     />
                   )}
                 </View>

@@ -3,6 +3,8 @@ import OpenAI from "openai";
 import type {
   ProcessResponse,
   RegenerateResponse,
+  ProcessSelectedTextRequest,
+  ProcessSelectedTextResponse,
   ApiError,
 } from "@trellis/shared";
 import {
@@ -11,6 +13,11 @@ import {
   gptProcessResponseSchema,
   gptRegenerateBlockSchema,
   gptRegenerateSummarySchema,
+  processSelectedTextRequestSchema,
+  gptSelectedSimplifyResponseSchema,
+  gptSelectedSummarizeResponseSchema,
+  gptSelectedVisualsResponseSchema,
+  processSelectedTextResponseSchema,
 } from "../schemas";
 import {
   SYSTEM_PROMPT,
@@ -20,6 +27,12 @@ import {
   PROCESS_JSON_SCHEMA,
   REGENERATE_BLOCK_JSON_SCHEMA,
   REGENERATE_SUMMARY_JSON_SCHEMA,
+  buildSelectedSimplifyMessage,
+  buildSelectedSummarizeMessage,
+  buildSelectedVisualsMessage,
+  SELECTED_SIMPLIFY_JSON_SCHEMA,
+  SELECTED_SUMMARIZE_JSON_SCHEMA,
+  SELECTED_VISUALS_JSON_SCHEMA,
 } from "../prompts";
 
 export const adaptRouter = Router();
@@ -219,6 +232,165 @@ adaptRouter.post("/process", async (req: Request, res: Response) => {
   };
 
   console.log(`[adapt/process] Completed in ${totalMs}ms — ${blocksWithImages.length} blocks`);
+  return res.json(response);
+});
+
+// ── POST /api/adapt/processSelectedText ──
+adaptRouter.post("/processSelectedText", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+
+  // 1. Validate request
+  const parsed = processSelectedTextRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return sendError(res, 400, {
+      code: "VALIDATION_ERROR",
+      message: parsed.error.issues.map((i) => i.message).join("; "),
+    });
+  }
+
+  const { selectedText, action, simplifyLevel, summaryMaxSentences, language } =
+    parsed.data as ProcessSelectedTextRequest;
+  const maxSentences = summaryMaxSentences ?? 5;
+  const lang = language ?? "en";
+
+  // 2. Build prompt + response schema
+  let userMessage = "";
+  let responseJsonSchema: any = null;
+
+  if (action === "simplify") {
+    userMessage = buildSelectedSimplifyMessage(selectedText, simplifyLevel as string);
+    responseJsonSchema = SELECTED_SIMPLIFY_JSON_SCHEMA;
+  } else if (action === "summarize") {
+    userMessage = buildSelectedSummarizeMessage(selectedText, maxSentences);
+    responseJsonSchema = SELECTED_SUMMARIZE_JSON_SCHEMA;
+  } else {
+    userMessage = buildSelectedVisualsMessage(selectedText);
+    responseJsonSchema = SELECTED_VISUALS_JSON_SCHEMA;
+  }
+
+  // 3. Call GPT-4o (with retry on parse failure)
+  let gptResult: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const completion = await getOpenAI().chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          {
+            role: "user",
+            content: `${userMessage}\n\nLanguage: ${lang}.`,
+          },
+        ],
+        response_format: {
+          type: "json_schema",
+          json_schema: responseJsonSchema,
+        },
+        temperature: 0.3,
+      });
+
+      const raw = completion.choices[0]?.message?.content;
+      if (!raw) throw new Error("Empty response from GPT-4o");
+
+      gptResult = JSON.parse(raw);
+      break;
+    } catch (err) {
+      if (attempt === 1) {
+        if (err instanceof OpenAI.APIError || err instanceof OpenAI.APIConnectionTimeoutError) {
+          const apiErr = classifyOpenAIError(err);
+          return sendError(res, httpStatusForCode(apiErr.code), apiErr);
+        }
+        return sendError(res, 502, {
+          code: "AI_PARSE_ERROR",
+          message: "Failed to parse AI response after retry.",
+        });
+      }
+      console.log(`[adapt/processSelectedText] Attempt ${attempt + 1} failed, retrying...`);
+    }
+  }
+
+  // 4. Validate GPT output + post-process visuals
+  if (action === "simplify") {
+    const gptParsed = gptSelectedSimplifyResponseSchema.safeParse(gptResult);
+    if (!gptParsed.success) {
+      return sendError(res, 502, {
+        code: "AI_PARSE_ERROR",
+        message: "AI response did not match expected schema.",
+      });
+    }
+
+    const response: ProcessSelectedTextResponse = {
+      action: "simplify",
+      result: {
+        simplifiedText: gptParsed.data.simplifiedText,
+        keywords: gptParsed.data.keywords,
+      },
+    };
+
+    const contract = processSelectedTextResponseSchema.safeParse(response);
+    if (!contract.success) {
+      return sendError(res, 502, {
+        code: "AI_PARSE_ERROR",
+        message: "Internal response contract validation failed.",
+      });
+    }
+
+    return res.json(response);
+  }
+
+  if (action === "summarize") {
+    const gptParsed = gptSelectedSummarizeResponseSchema.safeParse(gptResult);
+    if (!gptParsed.success) {
+      return sendError(res, 502, {
+        code: "AI_PARSE_ERROR",
+        message: "AI response did not match expected schema.",
+      });
+    }
+
+    const response: ProcessSelectedTextResponse = {
+      action: "summarize",
+      result: {
+        sentences: gptParsed.data.sentences,
+      },
+    };
+
+    const contract = processSelectedTextResponseSchema.safeParse(response);
+    if (!contract.success) {
+      return sendError(res, 502, {
+        code: "AI_PARSE_ERROR",
+        message: "Internal response contract validation failed.",
+      });
+    }
+
+    return res.json(response);
+  }
+
+  const gptParsed = gptSelectedVisualsResponseSchema.safeParse(gptResult);
+  if (!gptParsed.success) {
+    return sendError(res, 502, {
+      code: "AI_PARSE_ERROR",
+      message: "AI response did not match expected schema.",
+    });
+  }
+
+  const visualUrl = await generateImage(getOpenAI(), gptParsed.data.visualHint);
+  const response: ProcessSelectedTextResponse = {
+    action: "visuals",
+    result: {
+      visualHint: gptParsed.data.visualHint,
+      visualUrl,
+    },
+  };
+
+  const contract = processSelectedTextResponseSchema.safeParse(response);
+  if (!contract.success) {
+    return sendError(res, 502, {
+      code: "AI_PARSE_ERROR",
+      message: "Internal response contract validation failed.",
+    });
+  }
+
+  const totalMs = Date.now() - startTime;
+  console.log(`[adapt/processSelectedText] Completed in ${totalMs}ms (${action})`);
   return res.json(response);
 });
 

@@ -77,3 +77,63 @@ export const gptRegenerateBlockSchema = z.object({
 export const gptRegenerateSummarySchema = z.object({
   sentences: z.array(z.string()),
 });
+
+// ── Selected-text adaptation (triggered from iOS OCR selection) ──
+export const selectedSimplifyLevelSchema = z.enum(['G4', 'G5', 'G6', 'G7']);
+
+export const selectedProcessActionSchema = z.enum(['simplify', 'summarize', 'visuals']);
+
+export const processSelectedTextRequestSchema = z
+  .object({
+    selectedText: z.string().min(1, 'selectedText is required'),
+    action: selectedProcessActionSchema,
+    simplifyLevel: selectedSimplifyLevelSchema.optional(),
+    summaryMaxSentences: z.number().int().min(1).max(10).optional(),
+    language: z.string().optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.action === 'simplify' && !val.simplifyLevel) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['simplifyLevel'],
+        message: 'simplifyLevel is required when action === "simplify"',
+      });
+    }
+  });
+
+export const gptSelectedSimplifyResponseSchema = z.object({
+  simplifiedText: z.string(),
+  keywords: z.array(z.string()),
+});
+
+export const gptSelectedSummarizeResponseSchema = z.object({
+  sentences: z.array(z.string()),
+});
+
+export const gptSelectedVisualsResponseSchema = z.object({
+  visualHint: z.string(),
+});
+
+export const processSelectedTextResponseSimplifySchema = z.object({
+  action: z.literal('simplify'),
+  result: gptSelectedSimplifyResponseSchema,
+});
+
+export const processSelectedTextResponseSummarizeSchema = z.object({
+  action: z.literal('summarize'),
+  result: gptSelectedSummarizeResponseSchema,
+});
+
+export const processSelectedTextResponseVisualsSchema = z.object({
+  action: z.literal('visuals'),
+  result: z.object({
+    visualHint: z.string(),
+    visualUrl: z.union([z.string(), z.null()]),
+  }),
+});
+
+export const processSelectedTextResponseSchema = z.union([
+  processSelectedTextResponseSimplifySchema,
+  processSelectedTextResponseSummarizeSchema,
+  processSelectedTextResponseVisualsSchema,
+]);

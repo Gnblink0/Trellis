@@ -3,6 +3,8 @@ import type {
   ProcessResponse,
   RegenerateRequest,
   RegenerateResponse,
+  ProcessSelectedTextRequest,
+  ProcessSelectedTextResponse,
   ApiError,
 } from '@trellis/shared';
 
@@ -64,4 +66,10 @@ export function regenerateAdaptation(
   body: RegenerateRequest
 ): Promise<ApiResult<RegenerateResponse>> {
   return request<RegenerateResponse>('/api/adapt/regenerate', body);
+}
+
+export function processSelectedText(
+  body: ProcessSelectedTextRequest
+): Promise<ApiResult<ProcessSelectedTextResponse>> {
+  return request<ProcessSelectedTextResponse>('/api/adapt/processSelectedText', body);
 }

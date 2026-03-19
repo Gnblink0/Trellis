@@ -14,6 +14,38 @@ export interface Toggles {
 
 export type SimplifyLevel = 'G1' | 'G2' | null;
 
+// Selected-text adaptation (triggered from iOS OCR selection)
+export type SelectedSimplifyLevel = 'G4' | 'G5' | 'G6' | 'G7';
+
+export type SelectedProcessAction = 'simplify' | 'summarize' | 'visuals';
+
+export interface ProcessSelectedTextRequest {
+  selectedText: string;
+  action: SelectedProcessAction;
+  simplifyLevel?: SelectedSimplifyLevel; // required when action === 'simplify'
+  summaryMaxSentences?: number; // default 5
+  language?: string; // default 'en'
+}
+
+export interface SimplifySelectedTextResult {
+  simplifiedText: string;
+  keywords: string[];
+}
+
+export interface SummarizeSelectedTextResult {
+  sentences: string[];
+}
+
+export interface VisualsSelectedTextResult {
+  visualHint: string;
+  visualUrl: string | null;
+}
+
+export type ProcessSelectedTextResponse =
+  | { action: 'simplify'; result: SimplifySelectedTextResult }
+  | { action: 'summarize'; result: SummarizeSelectedTextResult }
+  | { action: 'visuals'; result: VisualsSelectedTextResult };
+
 export interface ProcessOptions {
   summaryMaxSentences?: number; // default 5
   language?: string;            // default "en"
