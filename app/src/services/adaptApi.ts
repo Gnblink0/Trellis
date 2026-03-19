@@ -7,7 +7,7 @@ import type {
 } from '@trellis/shared';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
-const TIMEOUT_MS = 60_000;
+const TIMEOUT_MS = 120_000;
 
 type ApiResult<T> =
   | { ok: true; data: T }

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
+  Image,
   StyleSheet,
   Pressable,
   Animated,
@@ -24,6 +25,7 @@ export type MarkerData = {
     keywords?: string[];
     bullets?: string[];
     visuals?: string[];
+    visualUrl?: string;
   };
 };
 
@@ -195,8 +197,22 @@ export default function FloatingMarker({
             </View>
           )}
 
-          {/* Visuals */}
-          {marker.content.visuals && marker.content.visuals.length > 0 && (
+          {/* Visual Support Image */}
+          {marker.content.visualUrl && (
+            <>
+              <Text style={styles.bubbleLabel}>Visual</Text>
+              <Image
+                source={{ uri: marker.content.visualUrl }}
+                style={styles.bubbleVisualImage}
+                resizeMode="contain"
+              />
+            </>
+          )}
+
+          {/* Text-based visual hints (fallback) */}
+          {!marker.content.visualUrl &&
+            marker.content.visuals &&
+            marker.content.visuals.length > 0 && (
             <View style={styles.visualsList}>
               {marker.content.visuals.map((v) => (
                 <View key={v} style={styles.visualItem}>
@@ -362,5 +378,12 @@ const styles = StyleSheet.create({
   visualText: {
     ...typography.micro,
     color: colors.textSecondary,
+  },
+  bubbleVisualImage: {
+    width: '100%',
+    height: 150,
+    borderRadius: radii.chip,
+    backgroundColor: colors.surfaceMuted,
+    marginTop: spacing.innerGapSmall,
   },
 });

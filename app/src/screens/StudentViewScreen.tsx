@@ -145,6 +145,7 @@ export default function StudentViewScreen() {
               keywords: a.keywords,
               bullets: a.bullets,
               visuals: a.visuals,
+              visualUrl: a.visualUrl,
             },
           };
         })

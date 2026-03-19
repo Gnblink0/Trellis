@@ -68,6 +68,7 @@ export default function ReviewScreen() {
                   simplifiedText: result.data.result.simplifiedText ?? b.simplifiedText,
                   keywords: result.data.result.keywords ?? b.keywords,
                   visualHint: result.data.result.visualHint ?? b.visualHint,
+                  visualUrl: result.data.result.visualUrl ?? b.visualUrl,
                 }
               : b
           )
@@ -131,6 +132,7 @@ export default function ReviewScreen() {
       original: b.originalText,
       result: b.simplifiedText ?? b.originalText,
       keywords: b.keywords,
+      visualUrl: b.visualUrl ?? undefined,
     }));
 
     navigation.navigate('StudentView', {
@@ -243,6 +245,27 @@ export default function ReviewScreen() {
                     </View>
                   ))}
                 </View>
+              )}
+
+              {/* Visual Support Image */}
+              {block.visualHint && (
+                <>
+                  <Text style={styles.sectionLabel}>Visual Support</Text>
+                  {block.visualUrl ? (
+                    <Image
+                      source={{ uri: block.visualUrl }}
+                      style={styles.visualImage}
+                      resizeMode="contain"
+                    />
+                  ) : (
+                    <View style={styles.visualFallback}>
+                      <Ionicons name="image-outline" size={24} color={colors.textSecondary} />
+                      <Text style={styles.visualFallbackText}>
+                        Image unavailable: {block.visualHint}
+                      </Text>
+                    </View>
+                  )}
+                </>
               )}
 
               {/* Actions */}
@@ -371,6 +394,28 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   keywordText: { ...typography.caption, color: colors.primary },
+
+  // Visual support image
+  visualImage: {
+    width: '100%',
+    height: 200,
+    borderRadius: radii.card,
+    backgroundColor: colors.surfaceMuted,
+    marginTop: spacing.innerGapSmall,
+  },
+  visualFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.innerGap,
+    backgroundColor: colors.surfaceMuted,
+    borderRadius: radii.card,
+    gap: spacing.innerGapSmall,
+  },
+  visualFallbackText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    textAlign: 'center',
+  },
 
   // Card actions
   cardActions: {

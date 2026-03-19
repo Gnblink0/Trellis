@@ -76,6 +76,32 @@ function classifyOpenAIError(err: unknown): ApiError {
   return { code: "INTERNAL_ERROR", message: "An unexpected error occurred." };
 }
 
+/**
+ * Generate an image from a visual hint using DALL-E 3.
+ * Returns the URL on success, null on failure (graceful degradation).
+ */
+async function generateImage(
+  openai: OpenAI,
+  visualHint: string
+): Promise<string | null> {
+  try {
+    const response = await openai.images.generate({
+      model: "dall-e-3",
+      prompt: `Simple, friendly, educational illustration for elementary school students: ${visualHint}. Style: clean, colorful, cartoon-like, no text or words in the image.`,
+      n: 1,
+      size: "1024x1024",
+      quality: "standard",
+    });
+    return response.data?.[0]?.url ?? null;
+  } catch (err) {
+    console.warn(
+      `[adapt] DALL-E 3 failed for hint "${visualHint}":`,
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
 // ── POST /api/adapt/process ──
 
 adaptRouter.post("/process", async (req: Request, res: Response) => {
@@ -160,6 +186,17 @@ adaptRouter.post("/process", async (req: Request, res: Response) => {
 
   const { blocks, summary } = gptParsed.data;
 
+  // 4b. Generate images for blocks with visual hints (parallel, fault-tolerant)
+  const blocksWithImages = await Promise.all(
+    blocks.map(async (block) => {
+      if (!block.visualHint || !toggles.visualSupport) {
+        return { ...block, visualUrl: null };
+      }
+      const visualUrl = await generateImage(getOpenAI(), block.visualHint);
+      return { ...block, visualUrl };
+    })
+  );
+
   // 5. Post-processing: enforce summary sentence limit
   if (summary && summary.sentences.length > summaryMaxSentences) {
     summary.sentences = summary.sentences.slice(0, summaryMaxSentences);
@@ -172,7 +209,7 @@ adaptRouter.post("/process", async (req: Request, res: Response) => {
   const totalMs = Date.now() - startTime;
 
   const response: ProcessResponse = {
-    blocks,
+    blocks: blocksWithImages,
     summary: toggles.summarize ? summary : null,
     meta: {
       simplifyLevel: toggles.simplifyLevel,
@@ -181,7 +218,7 @@ adaptRouter.post("/process", async (req: Request, res: Response) => {
     },
   };
 
-  console.log(`[adapt/process] Completed in ${totalMs}ms — ${blocks.length} blocks`);
+  console.log(`[adapt/process] Completed in ${totalMs}ms — ${blocksWithImages.length} blocks`);
   return res.json(response);
 });
 
@@ -231,11 +268,19 @@ adaptRouter.post("/regenerate", async (req: Request, res: Response) => {
         });
       }
 
+      // Generate image for the new visual hint
+      let visualUrl: string | undefined;
+      if (gptParsed.data.visualHint) {
+        const url = await generateImage(getOpenAI(), gptParsed.data.visualHint);
+        if (url) visualUrl = url;
+      }
+
       const response: RegenerateResponse = {
         target,
         result: {
           ...gptParsed.data,
           visualHint: gptParsed.data.visualHint ?? undefined,
+          visualUrl,
         },
         latencyMs: Date.now() - startTime,
       };

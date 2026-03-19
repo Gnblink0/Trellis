@@ -33,6 +33,7 @@ const LOADING_STEPS = [
   'Reading worksheet...',
   'Simplifying text...',
   'Generating summary...',
+  'Creating visual images...',
   'Almost done...',
 ];
 

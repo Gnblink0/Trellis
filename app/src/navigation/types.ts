@@ -19,6 +19,7 @@ export type AdaptedZone = {
   keywords?: string[];
   bullets?: string[];
   visuals?: string[];
+  visualUrl?: string;
 };
 
 // ── Navigation param list ──

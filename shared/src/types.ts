@@ -44,6 +44,7 @@ export interface AdaptedBlock {
   simplifiedText: string | null;
   keywords: string[];
   visualHint: string | null;
+  visualUrl: string | null;
 }
 
 export interface SummaryResult {
@@ -73,6 +74,7 @@ export interface RegenerateResult {
   simplifiedText?: string;
   keywords?: string[];
   visualHint?: string;
+  visualUrl?: string;
   sentences?: string[];
 }
 
