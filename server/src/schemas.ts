@@ -50,6 +50,12 @@ const adaptedBlockSchema = z.object({
   simplifiedText: z.union([z.string(), z.null()]),
   keywords: z.array(z.string()),
   visualHint: z.union([z.string(), z.null()]),
+  rect: z.object({
+    top: z.number(),
+    left: z.number(),
+    width: z.number(),
+    height: z.number(),
+  }).optional(),
 });
 
 const summaryResultSchema = z.object({

@@ -45,6 +45,7 @@ export interface AdaptedBlock {
   keywords: string[];
   visualHint: string | null;
   visualUrl: string | null;
+  rect?: { top: number; left: number; width: number; height: number };
 }
 
 export interface SummaryResult {

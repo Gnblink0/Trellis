@@ -119,15 +119,17 @@ export default function StudentViewScreen() {
   const markers: MarkerData[] =
     pageIndex === 0
       ? adaptations.map((a, index) => {
-          const zoneRect = ZONE_POSITIONS[a.zoneId];
-          // AI pipeline: no hardcoded zone coords → distribute evenly along right edge
+          const zoneRect = a.rect ?? ZONE_POSITIONS[a.zoneId];
+          // AI pipeline with rect: use exact GPT-4o coordinates (right edge of block)
+          // AI pipeline without rect: distribute evenly along right edge
+          // Legacy hardcoded zones: use zone center
           const basePosition = zoneRect
             ? {
-                x: zoneRect.left + zoneRect.width / 2,
-                y: zoneRect.top + zoneRect.height / 2,
+                x: 93,                                   // fixed right column, avoids overflow
+                y: zoneRect.top + zoneRect.height / 2,   // vertical center from GPT-4o rect
               }
             : {
-                x: 92,
+                x: 93,
                 y: Math.round((index + 0.5) * (100 / adaptations.length)),
               };
 

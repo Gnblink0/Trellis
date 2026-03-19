@@ -14,7 +14,8 @@ IMPORTANT RULES:
 - Do not add information that is not in the original
 - Do not skip any text sections visible in the image
 - Each block must have a short descriptive label (e.g. "Title", "Paragraph 1", "Question 3")
-- Assign each block a unique blockId like "b1", "b2", etc.`;
+- Assign each block a unique blockId like "b1", "b2", etc.
+- For each block, estimate its position as percentages of the full image dimensions: top (% from top edge), left (% from left edge), width (% of image width), height (% of image height). Values should be between 0 and 100.`;
 
 // ── Grade-level descriptions ──
 
@@ -115,8 +116,19 @@ export const PROCESS_JSON_SCHEMA = {
             simplifiedText: { type: ["string", "null"] as const },
             keywords: { type: "array" as const, items: { type: "string" as const } },
             visualHint: { type: ["string", "null"] as const },
+            rect: {
+              type: "object" as const,
+              properties: {
+                top: { type: "number" as const },
+                left: { type: "number" as const },
+                width: { type: "number" as const },
+                height: { type: "number" as const },
+              },
+              required: ["top", "left", "width", "height"],
+              additionalProperties: false,
+            },
           },
-          required: ["blockId", "label", "originalText", "simplifiedText", "keywords", "visualHint"],
+          required: ["blockId", "label", "originalText", "simplifiedText", "keywords", "visualHint", "rect"],
           additionalProperties: false,
         },
       },

@@ -133,6 +133,7 @@ export default function ReviewScreen() {
       result: b.simplifiedText ?? b.originalText,
       keywords: b.keywords,
       visualUrl: b.visualUrl ?? undefined,
+      rect: b.rect,
     }));
 
     navigation.navigate('StudentView', {

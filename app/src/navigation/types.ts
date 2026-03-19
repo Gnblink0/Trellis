@@ -20,6 +20,7 @@ export type AdaptedZone = {
   bullets?: string[];
   visuals?: string[];
   visualUrl?: string;
+  rect?: { top: number; left: number; width: number; height: number };
 };
 
 // ── Navigation param list ──
