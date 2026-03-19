@@ -8,6 +8,7 @@ import {
   Switch,
   ActivityIndicator,
   Alert,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
@@ -65,35 +66,44 @@ export default function ProcessScreen() {
     }, 3000);
 
     try {
-      // 1. Compress image
-      const manipulated = await ImageManipulator.manipulateAsync(
-        imageUri,
-        [{ resize: { width: 1024 } }],
-        { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
-      );
+      let imageBase64: string;
 
-      // 2. Read as base64
-      // On web, manipulateAsync already returns a data: URI; on native it returns a file: URI
-      let base64: string;
-      if (manipulated.uri.startsWith('data:')) {
-        base64 = manipulated.uri.split(',')[1];
+      if (Platform.OS === 'web') {
+        // Web: fetch the blob URI and convert to base64 via FileReader
+        const response = await fetch(imageUri);
+        const blob = await response.blob();
+        imageBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result as string;
+            resolve(result); // already "data:image/...;base64,..."
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
       } else {
-        base64 = await FileSystem.readAsStringAsync(manipulated.uri, {
+        // Native: compress then read from file system
+        const manipulated = await ImageManipulator.manipulateAsync(
+          imageUri,
+          [{ resize: { width: 1024 } }],
+          { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+        );
+        const base64 = await FileSystem.readAsStringAsync(manipulated.uri, {
           encoding: FileSystem.EncodingType.Base64,
         });
-      }
 
-      // 3. Check size (4MB limit)
-      if (base64.length > 4 * 1024 * 1024) {
-        Alert.alert(
-          'Image Too Large',
-          'The image is too large even after compression. Please take a closer, clearer photo.',
-          [{ text: 'OK' }]
-        );
-        return;
-      }
+        // Check size (4MB limit)
+        if (base64.length > 4 * 1024 * 1024) {
+          Alert.alert(
+            'Image Too Large',
+            'The image is too large even after compression. Please take a closer, clearer photo.',
+            [{ text: 'OK' }]
+          );
+          return;
+        }
 
-      const imageBase64 = `data:image/jpeg;base64,${base64}`;
+        imageBase64 = `data:image/jpeg;base64,${base64}`;
+      }
 
       // 4. Call API
       const result = await processWorksheet({
@@ -103,7 +113,11 @@ export default function ProcessScreen() {
       });
 
       if (!result.ok) {
-        Alert.alert('Processing Failed', result.error.message, [{ text: 'OK' }]);
+        if (Platform.OS === 'web') {
+          window.alert('Processing Failed\n' + result.error.message);
+        } else {
+          Alert.alert('Processing Failed', result.error.message, [{ text: 'OK' }]);
+        }
         return;
       }
 
@@ -113,11 +127,13 @@ export default function ProcessScreen() {
         imageUri,
       });
     } catch (err) {
-      Alert.alert(
-        'Error',
-        err instanceof Error ? err.message : 'An unexpected error occurred.',
-        [{ text: 'OK' }]
-      );
+      const msg = err instanceof Error ? err.message : 'An unexpected error occurred.';
+      console.error('[ProcessScreen] handleProcess error:', msg, err);
+      if (Platform.OS === 'web') {
+        window.alert('Error\n' + msg);
+      } else {
+        Alert.alert('Error', msg, [{ text: 'OK' }]);
+      }
     } finally {
       clearInterval(stepInterval);
       setIsProcessing(false);
