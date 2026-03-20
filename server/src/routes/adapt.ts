@@ -92,7 +92,16 @@ async function generateImage(
       size: "1024x1024",
       quality: "standard",
     });
-    return response.data?.[0]?.url ?? null;
+    const url = response.data?.[0]?.url;
+    if (!url) return null;
+
+    // Fetch the image and convert to base64 data URL to avoid expiring Azure links
+    const imgResponse = await fetch(url);
+    if (!imgResponse.ok) return null;
+    const arrayBuffer = await imgResponse.arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString("base64");
+    const contentType = imgResponse.headers.get("content-type") ?? "image/png";
+    return `data:${contentType};base64,${base64}`;
   } catch (err) {
     console.warn(
       `[adapt] DALL-E 3 failed for hint "${visualHint}":`,
