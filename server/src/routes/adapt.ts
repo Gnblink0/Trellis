@@ -17,6 +17,7 @@ import {
   buildProcessUserMessage,
   buildRegenerateBlockMessage,
   buildRegenerateSummaryMessage,
+  buildDalle3ImagePrompt,
   PROCESS_JSON_SCHEMA,
   REGENERATE_BLOCK_JSON_SCHEMA,
   REGENERATE_SUMMARY_JSON_SCHEMA,
@@ -76,18 +77,30 @@ function classifyOpenAIError(err: unknown): ApiError {
   return { code: "INTERNAL_ERROR", message: "An unexpected error occurred." };
 }
 
+type ImageGenContext = {
+  /** e.g. "Title", "Question 2" — helps section-level framing. */
+  label?: string;
+  /** Truncated in buildDalle3ImagePrompt; worksheet excerpt for caption disambiguation. */
+  instructionalContext?: string;
+};
+
 /**
- * Generate an image from a visual hint using DALL-E 3.
+ * Generate an image from a caption-style visual hint using DALL·E 3 (caption-enhanced prompt + optional instructional context).
  * Returns the URL on success, null on failure (graceful degradation).
  */
 async function generateImage(
   openai: OpenAI,
-  visualHint: string
+  visualHint: string,
+  context?: ImageGenContext
 ): Promise<string | null> {
   try {
+    const prompt = buildDalle3ImagePrompt(visualHint, {
+      label: context?.label,
+      instructionalContext: context?.instructionalContext,
+    });
     const response = await openai.images.generate({
       model: "dall-e-3",
-      prompt: `Simple, friendly, educational illustration for elementary school students: ${visualHint}. Style: clean, colorful, cartoon-like, no text or words in the image.`,
+      prompt,
       n: 1,
       size: "1024x1024",
       quality: "standard",
@@ -104,7 +117,7 @@ async function generateImage(
     return `data:${contentType};base64,${base64}`;
   } catch (err) {
     console.warn(
-      `[adapt] DALL-E 3 failed for hint "${visualHint}":`,
+      `[adapt] DALL·E 3 failed for hint "${visualHint.slice(0, 80)}${visualHint.length > 80 ? "…" : ""}":`,
       err instanceof Error ? err.message : err
     );
     return null;
@@ -201,7 +214,10 @@ adaptRouter.post("/process", async (req: Request, res: Response) => {
       if (!block.visualHint || !toggles.visualSupport) {
         return { ...block, visualUrl: null };
       }
-      const visualUrl = await generateImage(getOpenAI(), block.visualHint);
+      const visualUrl = await generateImage(getOpenAI(), block.visualHint, {
+        label: block.label,
+        instructionalContext: block.originalText,
+      });
       return { ...block, visualUrl };
     })
   );
@@ -280,7 +296,10 @@ adaptRouter.post("/regenerate", async (req: Request, res: Response) => {
       // Generate image for the new visual hint
       let visualUrl: string | undefined;
       if (gptParsed.data.visualHint) {
-        const url = await generateImage(getOpenAI(), gptParsed.data.visualHint);
+        const url = await generateImage(getOpenAI(), gptParsed.data.visualHint, {
+          label: `Block ${target.blockId}`,
+          instructionalContext: context.originalText,
+        });
         if (url) visualUrl = url;
       }
 

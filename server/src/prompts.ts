@@ -43,9 +43,13 @@ export function buildProcessUserMessage(
   }
 
   if (toggles.visualSupport) {
-    parts.push(
-      "For each text block, suggest a short visual description (2-5 words) that could be used to generate a supporting image."
-    );
+    parts.push(`For each text block, set "visualHint" to a short, caption-style description for image generation (DALL·E 3), not a bare keyword list.
+
+Requirements for each visualHint:
+- Write one or two sentences (roughly 25–90 words) that could serve as the main caption for an educational illustration.
+- Use the block's meaning in context: if a word could mean more than one thing (e.g. "cell", "current", "plate"), rely on the surrounding worksheet content so the intended curriculum sense is obvious.
+- Name concrete, drawable elements: setting, objects, relationships, and a simple visual convention when helpful (e.g. "simple cross-section", "cutaway diagram style", "map-like overview")—aligned with grades 4–7 science or social studies.
+- Do not include instructions to the student; describe only what should appear in the picture.`);
   }
 
   // Clarify null fields based on toggles
@@ -80,9 +84,46 @@ export function buildRegenerateBlockMessage(
   return `Rewrite the following text. ${levelInstruction}
 Provide a different version from a previous attempt — keep the same meaning but use different words and sentence structures.
 
+Also set "visualHint" to a short caption-style description (about 25–90 words) for DALL·E 3: one or two sentences naming concrete, drawable content for this block only, using the original meaning in context so ambiguous curriculum words are clearly disambiguated. No student-facing instructions—only what should appear in the illustration.
+
 Original text: "${originalText}"
 
 Output as JSON matching the provided schema.`;
+}
+
+/** Truncate worksheet text for DALL·E 3 disambiguation (prompt budget). */
+const IMAGE_CONTEXT_MAX_CHARS = 500;
+
+/**
+ * Build a layered, caption-enhanced prompt for DALL·E 3 (Betker-style descriptive captions + instructional context).
+ */
+export function buildDalle3ImagePrompt(
+  visualHint: string,
+  options?: { label?: string; instructionalContext?: string }
+): string {
+  const styleBlock = `Educational illustration for grades 4–7 (science or social studies). Purpose: help a student understand the worksheet content. Visual style: clean, colorful, simple composition, friendly cartoon-like clarity; no text, letters, numbers, watermarks, or labels drawn in the image.`;
+
+  const parts: string[] = [styleBlock];
+
+  const label = options?.label?.trim();
+  if (label) {
+    parts.push(`Worksheet section label: ${label}`);
+  }
+
+  const raw = options?.instructionalContext?.trim();
+  if (raw) {
+    const truncated =
+      raw.length > IMAGE_CONTEXT_MAX_CHARS
+        ? raw.slice(0, IMAGE_CONTEXT_MAX_CHARS - 1) + "…"
+        : raw;
+    parts.push(
+      `Instructional context (use to pick the correct curriculum meaning and avoid unrelated senses of the same words):\n${truncated}`
+    );
+  }
+
+  parts.push(`Primary image caption (what to draw):\n${visualHint.trim()}`);
+
+  return parts.join("\n\n");
 }
 
 export function buildRegenerateSummaryMessage(
