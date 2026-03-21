@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { colors, typography, spacing, radii, shadows } from '../theme';
 import { RootStackParamList } from '../navigation/types';
 import { processWorksheet } from '../services/adaptApi';
+import { registerWorksheetUse, updateRecentTitle } from '../services/recentWorksheets';
 import type { SimplifyLevel } from '@trellis/shared';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Process'>;
@@ -43,6 +44,30 @@ export default function ProcessScreen() {
   const route = useRoute<Route>();
   const { imageUri } = route.params;
 
+  const [resolvedUri, setResolvedUri] = useState(imageUri);
+  /** Native: wait until the image is copied into app storage before reading for upload. */
+  const [persistReady, setPersistReady] = useState(Platform.OS === 'web');
+  const worksheetIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { uri, id } = await registerWorksheetUse(imageUri);
+        if (cancelled) return;
+        worksheetIdRef.current = id;
+        setResolvedUri(uri);
+        setPersistReady(true);
+      } catch (e) {
+        console.error('[ProcessScreen] registerWorksheetUse', e);
+        if (!cancelled) setPersistReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [imageUri]);
+
   // Toggle state
   const [visualSupport, setVisualSupport] = useState(true);
   const [simplifyLevel, setSimplifyLevel] = useState<SimplifyLevel>('G1');
@@ -55,7 +80,7 @@ export default function ProcessScreen() {
   const hasAtLeastOneToggle = visualSupport || simplifyLevel !== null || summarize;
 
   const handleProcess = async () => {
-    if (!hasAtLeastOneToggle) return;
+    if (!hasAtLeastOneToggle || !persistReady) return;
 
     setIsProcessing(true);
     setLoadingStep(0);
@@ -70,7 +95,7 @@ export default function ProcessScreen() {
 
       if (Platform.OS === 'web') {
         // Web: fetch the blob URI and convert to base64 via FileReader
-        const response = await fetch(imageUri);
+        const response = await fetch(resolvedUri);
         const blob = await response.blob();
         imageBase64 = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();
@@ -84,7 +109,7 @@ export default function ProcessScreen() {
       } else {
         // Native: compress then read from file system
         const manipulated = await ImageManipulator.manipulateAsync(
-          imageUri,
+          resolvedUri,
           [{ resize: { width: 1024 } }],
           { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
         );
@@ -121,10 +146,16 @@ export default function ProcessScreen() {
         return;
       }
 
+      const wid = worksheetIdRef.current;
+      if (wid) {
+        const label = result.data.blocks[0]?.label?.trim();
+        await updateRecentTitle(wid, label || 'Worksheet');
+      }
+
       // 5. Navigate to Review
       navigation.replace('Review', {
         response: result.data,
-        imageUri,
+        imageUri: resolvedUri,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'An unexpected error occurred.';
@@ -154,7 +185,7 @@ export default function ProcessScreen() {
       <View style={styles.content}>
         {/* Image preview */}
         <View style={styles.previewSection}>
-          <Image source={{ uri: imageUri }} style={styles.previewImage} resizeMode="contain" />
+          <Image source={{ uri: resolvedUri }} style={styles.previewImage} resizeMode="contain" />
         </View>
 
         {/* Toggles */}
@@ -172,8 +203,8 @@ export default function ProcessScreen() {
               value={visualSupport}
               onValueChange={setVisualSupport}
               trackColor={{ false: colors.surfaceMuted, true: colors.primaryLight }}
-              thumbColor={visualSupport ? colors.primary : '#ccc'}
-              disabled={isProcessing}
+              thumbColor={visualSupport ? colors.primary : colors.textSecondary}
+              disabled={isProcessing || !persistReady}
             />
           </View>
 
@@ -196,7 +227,7 @@ export default function ProcessScreen() {
                   simplifyLevel === opt.value && styles.chipActive,
                 ]}
                 onPress={() => setSimplifyLevel(opt.value)}
-                disabled={isProcessing}
+                disabled={isProcessing || !persistReady}
               >
                 <Text
                   style={[
@@ -223,8 +254,8 @@ export default function ProcessScreen() {
               value={summarize}
               onValueChange={setSummarize}
               trackColor={{ false: colors.surfaceMuted, true: colors.primaryLight }}
-              thumbColor={summarize ? colors.primary : '#ccc'}
-              disabled={isProcessing}
+              thumbColor={summarize ? colors.primary : colors.textSecondary}
+              disabled={isProcessing || !persistReady}
             />
           </View>
         </View>
@@ -238,9 +269,12 @@ export default function ProcessScreen() {
         </View>
       ) : (
         <Pressable
-          style={[styles.processBtn, !hasAtLeastOneToggle && styles.processBtnDisabled]}
+          style={[
+            styles.processBtn,
+            (!hasAtLeastOneToggle || !persistReady) && styles.processBtnDisabled,
+          ]}
           onPress={handleProcess}
-          disabled={!hasAtLeastOneToggle}
+          disabled={!hasAtLeastOneToggle || !persistReady}
         >
           <Ionicons name="sparkles" size={20} color={colors.surface} />
           <Text style={styles.processBtnText}>Process Now</Text>

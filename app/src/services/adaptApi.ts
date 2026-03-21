@@ -36,7 +36,13 @@ async function request<T>(
 
     return { ok: true, data: json as T };
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
+    // RN/Hermes has no global DOMException; use name check (works for web + native abort).
+    const isAbort =
+      err != null &&
+      typeof err === 'object' &&
+      'name' in err &&
+      (err as { name: string }).name === 'AbortError';
+    if (isAbort) {
       return {
         ok: false,
         error: { code: 'AI_TIMEOUT', message: 'Request timed out. Please try again.' },

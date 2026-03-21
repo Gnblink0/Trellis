@@ -1,16 +1,44 @@
-import { View, Text, StyleSheet, Pressable, ScrollView, Alert } from 'react-native';
+import { useCallback, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, ScrollView, Alert, Image, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { colors, typography, spacing, radii } from '../theme';
 import { RootStackParamList } from '../navigation/types';
+import {
+  getRecentWorksheets,
+  type RecentWorksheet,
+} from '../services/recentWorksheets';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
+function formatRelativeTime(ts: number): string {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return 'Just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} hr${h === 1 ? '' : 's'} ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d} day${d === 1 ? '' : 's'} ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
 export default function HomeScreen() {
   const navigation = useNavigation<Nav>();
+  const [recents, setRecents] = useState<RecentWorksheet[]>([]);
+
+  const loadRecents = useCallback(() => {
+    void getRecentWorksheets().then(setRecents);
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadRecents();
+    }, [loadRecents])
+  );
 
   const handleScanWorksheet = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -90,41 +118,59 @@ export default function HomeScreen() {
         {/* Recent Worksheets */}
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Recent Worksheets</Text>
-          <View style={styles.recentList}>
-            {MOCK_RECENT.map((item) => (
-              <Pressable key={item.id} style={styles.recentCard}>
-                <View style={styles.thumbnail}>
+          {recents.length === 0 ? (
+            <Text style={styles.recentEmpty}>
+              {Platform.OS === 'web'
+                ? 'Recent worksheets are saved when you use the app on a device.'
+                : 'Your uploaded worksheets will show up here.'}
+            </Text>
+          ) : (
+            <View style={styles.recentList}>
+              {recents.map((item) => (
+                <Pressable
+                  key={item.id}
+                  style={styles.recentCard}
+                  onPress={() =>
+                    navigation.navigate('Process', { imageUri: item.imageUri })
+                  }
+                >
+                  <View style={styles.thumbnail}>
+                    {Platform.OS === 'web' ? (
+                      <Ionicons
+                        name="document-text"
+                        size={24}
+                        color={colors.textSecondary}
+                      />
+                    ) : (
+                      <Image
+                        source={{ uri: item.imageUri }}
+                        style={styles.thumbnailImage}
+                        resizeMode="cover"
+                      />
+                    )}
+                  </View>
+                  <View style={styles.recentInfo}>
+                    <Text style={styles.recentTitle} numberOfLines={1}>
+                      {item.title}
+                    </Text>
+                    <Text style={styles.recentMeta}>
+                      {formatRelativeTime(item.createdAt)}
+                    </Text>
+                  </View>
                   <Ionicons
-                    name="document-text"
-                    size={24}
+                    name="chevron-forward"
+                    size={20}
                     color={colors.textSecondary}
                   />
-                </View>
-                <View style={styles.recentInfo}>
-                  <Text style={styles.recentTitle} numberOfLines={1}>
-                    {item.title}
-                  </Text>
-                  <Text style={styles.recentMeta}>{item.meta}</Text>
-                </View>
-                <Ionicons
-                  name="chevron-forward"
-                  size={20}
-                  color={colors.textSecondary}
-                />
-              </Pressable>
-            ))}
-          </View>
+                </Pressable>
+              ))}
+            </View>
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
-
-const MOCK_RECENT = [
-  { id: '1', title: 'Parts of a Plant', meta: 'Gr. 2 · Adapted 2 hrs ago' },
-  { id: '2', title: 'Water Cycle', meta: 'Gr. 3 · Adapted yesterday' },
-  { id: '3', title: 'Solar System', meta: 'Gr. 4 · Adapted 3 days ago' },
-];
 
 const styles = StyleSheet.create({
   safe: {
@@ -143,9 +189,9 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 8,
-    paddingBottom: 16,
-    gap: 12,
+    paddingTop: spacing.innerGapSmall,
+    paddingBottom: spacing.innerGap,
+    gap: spacing.innerGapSmall,
   },
   logoBox: {
     width: 44,
@@ -247,10 +293,20 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  thumbnailImage: {
+    width: '100%',
+    height: '100%',
+  },
+  recentEmpty: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    paddingVertical: spacing.innerGapSmall,
   },
   recentInfo: {
     flex: 1,
-    gap: 4,
+    gap: spacing.innerGapSmall,
   },
   recentTitle: {
     ...typography.cardTitle,
