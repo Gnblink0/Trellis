@@ -4,6 +4,7 @@ import type {
   RegenerateRequest,
   RegenerateResponse,
   ApiError,
+  OcrScanResponse,
 } from '@trellis/shared';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
@@ -70,4 +71,8 @@ export function regenerateAdaptation(
   body: RegenerateRequest
 ): Promise<ApiResult<RegenerateResponse>> {
   return request<RegenerateResponse>('/api/adapt/regenerate', body);
+}
+
+export function scanImageOcr(imageBase64: string): Promise<ApiResult<OcrScanResponse>> {
+  return request<OcrScanResponse>('/api/ocr/scan', { imageBase64 });
 }

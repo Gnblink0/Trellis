@@ -13,6 +13,8 @@ export const colors = {
   textSecondary: '#7B8794',
 
   // Semantic
+  /** OCR / Live Text selection — highlighter-style yellow (use with opacity in overlays). */
+  selectionHighlight: '#EEFF41',
   warning: '#FFF8E1',
   warningText: '#8B7335',
   error: '#F4845F',

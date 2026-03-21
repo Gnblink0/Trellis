@@ -1,4 +1,4 @@
-import type { AdaptedBlock, ProcessResponse } from '@trellis/shared';
+import type { AdaptedBlock, ProcessResponse, ProcessMeta } from '@trellis/shared';
 
 // ── Legacy types (used by WorksheetViewScreen, StudentViewScreen, ExportScreen) ──
 
@@ -27,9 +27,15 @@ export type AdaptedZone = {
 
 export type RootStackParamList = {
   Home: undefined;
+  WorksheetCapture: undefined;
   WorksheetView: undefined;
   Process: { imageUri: string };
   Review: { response: ProcessResponse; imageUri: string };
+  /** Select phrases from extracted text (scan view); uses worksheet image + OCR-style text from blocks. */
+  ScanWorksheet: { blocks: AdaptedBlock[]; meta: ProcessMeta; imageUri: string };
+  /** Tesseract OCR on each page photo, Live Text–style word boxes + snippet actions. */
+  /** When opened from Home recents, pass `worksheetId` so the sheet can be renamed and stays in sync. */
+  OcrLiveText: { pageUris: string[]; worksheetId?: string };
   StudentView: { title: string; adaptations: AdaptedZone[]; imageUri?: string } | undefined;
   Export: { title: string; adaptations: AdaptationSummary[] } | undefined;
 };

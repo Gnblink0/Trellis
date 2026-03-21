@@ -90,11 +90,19 @@ function newId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 }
 
+export type RegisterWorksheetOptions = {
+  /** Shown in Recent worksheets (max 120 chars, trimmed). */
+  title?: string;
+};
+
 /**
  * Copy a picker/camera URI into app storage (if needed), add to recents, return URI for display/processing.
  * On web, returns the source URI unchanged and does not persist.
  */
-export async function registerWorksheetUse(sourceUri: string): Promise<{
+export async function registerWorksheetUse(
+  sourceUri: string,
+  options?: RegisterWorksheetOptions
+): Promise<{
   uri: string;
   id: string | null;
 }> {
@@ -113,10 +121,12 @@ export async function registerWorksheetUse(sourceUri: string): Promise<{
   const dest = `${worksheetsDir()}${id}.jpg`;
   await FileSystem.copyAsync({ from: sourceUri, to: dest });
 
+  const initialTitle = options?.title?.trim().slice(0, 120) || 'Worksheet';
+
   const item: RecentWorksheet = {
     id,
     createdAt: Date.now(),
-    title: 'Worksheet',
+    title: initialTitle,
     imageUri: dest,
   };
 
@@ -129,6 +139,12 @@ export async function registerWorksheetUse(sourceUri: string): Promise<{
   }
 
   return { uri: dest, id };
+}
+
+export async function getRecentWorksheetById(id: string): Promise<RecentWorksheet | null> {
+  if (Platform.OS === 'web') return null;
+  const list = await loadIndex();
+  return list.find((w) => w.id === id) ?? null;
 }
 
 export async function getRecentWorksheets(): Promise<RecentWorksheet[]> {

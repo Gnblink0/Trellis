@@ -11,16 +11,21 @@ import {
   gptProcessResponseSchema,
   gptRegenerateBlockSchema,
   gptRegenerateSummarySchema,
+  gptSnippetVisualSchema,
 } from "../schemas";
 import {
   SYSTEM_PROMPT,
   buildProcessUserMessage,
   buildRegenerateBlockMessage,
   buildRegenerateSummaryMessage,
+  buildSnippetSimplifyMessage,
+  buildSnippetVisualOnlyMessage,
+  buildSnippetSummaryMessage,
   buildDalle3ImagePrompt,
   PROCESS_JSON_SCHEMA,
   REGENERATE_BLOCK_JSON_SCHEMA,
   REGENERATE_SUMMARY_JSON_SCHEMA,
+  REGENERATE_SNIPPET_VISUAL_JSON_SCHEMA,
 } from "../prompts";
 
 export const adaptRouter = Router();
@@ -264,6 +269,168 @@ adaptRouter.post("/regenerate", async (req: Request, res: Response) => {
   const { target, context } = parsed.data;
 
   try {
+    if (target.type === "snippet") {
+      const mode = context.mode;
+      if (!mode) {
+        return sendError(res, 400, {
+          code: "VALIDATION_ERROR",
+          message: "context.mode is required for snippet target.",
+        });
+      }
+
+      const excerpt = context.originalText.trim();
+      if (excerpt.length === 0) {
+        return sendError(res, 400, {
+          code: "VALIDATION_ERROR",
+          message: "Empty selection.",
+        });
+      }
+      if (excerpt.length > 4000) {
+        return sendError(res, 400, {
+          code: "VALIDATION_ERROR",
+          message: "Selection is too long (max 4000 characters).",
+        });
+      }
+
+      if (mode === "simplify") {
+        const level = context.simplifyLevel ?? "G2";
+        const userMessage = buildSnippetSimplifyMessage(excerpt, level);
+
+        const completion = await getOpenAI().chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: userMessage },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: REGENERATE_BLOCK_JSON_SCHEMA,
+          },
+          temperature: 0.5,
+        });
+
+        const raw = completion.choices[0]?.message?.content;
+        if (!raw) throw new Error("Empty response from GPT-4o");
+
+        const gptParsed = gptRegenerateBlockSchema.safeParse(JSON.parse(raw));
+        if (!gptParsed.success) {
+          return sendError(res, 502, {
+            code: "AI_PARSE_ERROR",
+            message: "AI response did not match expected schema.",
+          });
+        }
+
+        let visualUrl: string | undefined;
+        if (gptParsed.data.visualHint) {
+          const url = await generateImage(getOpenAI(), gptParsed.data.visualHint, {
+            label: "Selected excerpt",
+            instructionalContext: excerpt,
+          });
+          if (url) visualUrl = url;
+        }
+
+        const response: RegenerateResponse = {
+          target,
+          result: {
+            ...gptParsed.data,
+            visualHint: gptParsed.data.visualHint ?? undefined,
+            visualUrl,
+          },
+          latencyMs: Date.now() - startTime,
+        };
+
+        console.log(`[adapt/regenerate] Snippet simplify in ${response.latencyMs}ms`);
+        return res.json(response);
+      }
+
+      if (mode === "visual") {
+        const userMessage = buildSnippetVisualOnlyMessage(excerpt);
+
+        const completion = await getOpenAI().chat.completions.create({
+          model: "gpt-4o",
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: userMessage },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: REGENERATE_SNIPPET_VISUAL_JSON_SCHEMA,
+          },
+          temperature: 0.5,
+        });
+
+        const raw = completion.choices[0]?.message?.content;
+        if (!raw) throw new Error("Empty response from GPT-4o");
+
+        const gptParsed = gptSnippetVisualSchema.safeParse(JSON.parse(raw));
+        if (!gptParsed.success) {
+          return sendError(res, 502, {
+            code: "AI_PARSE_ERROR",
+            message: "AI response did not match expected schema.",
+          });
+        }
+
+        const url = await generateImage(getOpenAI(), gptParsed.data.visualHint, {
+          label: "Selected excerpt",
+          instructionalContext: excerpt,
+        });
+
+        const response: RegenerateResponse = {
+          target,
+          result: {
+            visualHint: gptParsed.data.visualHint,
+            visualUrl: url ?? undefined,
+          },
+          latencyMs: Date.now() - startTime,
+        };
+
+        console.log(`[adapt/regenerate] Snippet visual in ${response.latencyMs}ms`);
+        return res.json(response);
+      }
+
+      // mode === "summary"
+      const maxSentences = Math.min(context.summaryMaxSentences ?? 3, 5);
+      const userMessage = buildSnippetSummaryMessage(excerpt, maxSentences);
+
+      const completion = await getOpenAI().chat.completions.create({
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: userMessage },
+        ],
+        response_format: {
+          type: "json_schema",
+          json_schema: REGENERATE_SUMMARY_JSON_SCHEMA,
+        },
+        temperature: 0.5,
+      });
+
+      const raw = completion.choices[0]?.message?.content;
+      if (!raw) throw new Error("Empty response from GPT-4o");
+
+      const gptParsed = gptRegenerateSummarySchema.safeParse(JSON.parse(raw));
+      if (!gptParsed.success) {
+        return sendError(res, 502, {
+          code: "AI_PARSE_ERROR",
+          message: "AI response did not match expected schema.",
+        });
+      }
+
+      let { sentences } = gptParsed.data;
+      if (sentences.length > maxSentences) {
+        sentences = sentences.slice(0, maxSentences);
+      }
+
+      const response: RegenerateResponse = {
+        target,
+        result: { sentences },
+        latencyMs: Date.now() - startTime,
+      };
+
+      console.log(`[adapt/regenerate] Snippet summary in ${response.latencyMs}ms`);
+      return res.json(response);
+    }
+
     if (target.type === "block") {
       // Regenerate a single block
       const level = context.simplifyLevel ?? "G2";

@@ -47,6 +47,8 @@ Server runs at `http://localhost:3001`. Verify with:
 curl http://localhost:3001/health
 ```
 
+**OCR (Live Text scan):** Worksheet pages are sent to `POST /api/ocr/scan` for Tesseract.js text detection with word boxes. The **first** OCR request may download the English model (~a few MB); keep the machine online once for that.
+
 ### 3. Start the Expo dev server
 
 Open a new terminal:

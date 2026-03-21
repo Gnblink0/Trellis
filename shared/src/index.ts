@@ -5,6 +5,7 @@ export type {
   ProcessOptions,
   RegenerateRequest,
   RegenerateTarget,
+  SnippetMode,
   RegenerateContext,
   AdaptedBlock,
   SummaryResult,
@@ -14,4 +15,6 @@ export type {
   RegenerateResult,
   ApiErrorCode,
   ApiError,
+  OcrWordBox,
+  OcrScanResponse,
 } from './types';

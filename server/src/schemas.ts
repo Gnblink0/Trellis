@@ -28,18 +28,39 @@ export const processRequestSchema = z.object({
     .optional(),
 });
 
-export const regenerateRequestSchema = z.object({
-  target: z.union([
-    z.object({ type: z.literal("block"), blockId: z.string().min(1) }),
-    z.object({ type: z.literal("summary") }),
-  ]),
-  context: z.object({
-    originalText: z.string().min(1, "originalText is required"),
-    simplifyLevel: z.union([z.literal("G1"), z.literal("G2")]).optional(),
-    summaryMaxSentences: z.number().int().min(1).max(10).optional(),
-    language: z.string().optional(),
-  }),
-});
+export const snippetModeSchema = z.enum(["simplify", "visual", "summary"]);
+
+export const regenerateRequestSchema = z
+  .object({
+    target: z.union([
+      z.object({ type: z.literal("block"), blockId: z.string().min(1) }),
+      z.object({ type: z.literal("summary") }),
+      z.object({ type: z.literal("snippet") }),
+    ]),
+    context: z.object({
+      originalText: z.string().min(1, "originalText is required"),
+      simplifyLevel: z.union([z.literal("G1"), z.literal("G2")]).optional(),
+      summaryMaxSentences: z.number().int().min(1).max(10).optional(),
+      language: z.string().optional(),
+      mode: snippetModeSchema.optional(),
+    }),
+  })
+  .superRefine((data, ctx) => {
+    if (data.target.type === "snippet" && data.context.mode === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "context.mode is required when target.type is snippet",
+        path: ["context", "mode"],
+      });
+    }
+    if (data.target.type !== "snippet" && data.context.mode !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "context.mode is only valid when target.type is snippet",
+        path: ["context", "mode"],
+      });
+    }
+  });
 
 // ── GPT-4o response validation ──
 
@@ -76,4 +97,9 @@ export const gptRegenerateBlockSchema = z.object({
 
 export const gptRegenerateSummarySchema = z.object({
   sentences: z.array(z.string()),
+});
+
+/** Visual-only adaptation for a user-selected phrase. */
+export const gptSnippetVisualSchema = z.object({
+  visualHint: z.string(),
 });

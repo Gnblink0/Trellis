@@ -43,13 +43,13 @@ export function buildProcessUserMessage(
   }
 
   if (toggles.visualSupport) {
-    parts.push(`For each text block, set "visualHint" to a short, caption-style description for image generation (DALL·E 3), not a bare keyword list.
+    parts.push(`For each text block, set "visualHint" to a single caption for image generation (DALL·E 3)—not a keyword list.
 
-Requirements for each visualHint:
-- Write one or two sentences (roughly 25–90 words) that could serve as the main caption for an educational illustration.
-- Use the block's meaning in context: if a word could mean more than one thing (e.g. "cell", "current", "plate"), rely on the surrounding worksheet content so the intended curriculum sense is obvious.
-- Name concrete, drawable elements: setting, objects, relationships, and a simple visual convention when helpful (e.g. "simple cross-section", "cutaway diagram style", "map-like overview")—aligned with grades 4–7 science or social studies.
-- Do not include instructions to the student; describe only what should appear in the picture.`);
+Requirements for each visualHint (keep it short):
+- One or two sentences only, total length about 12–40 words (roughly 80–220 characters). Do not write long paragraphs.
+- Describe ONE main idea for the picture. At most one clear focal subject plus at most one or two simple supporting objects if needed. Do not list many items or sub-scenes.
+- If a word is ambiguous (e.g. "cell", "current"), use the worksheet context so the curriculum meaning is clear—briefly.
+- Do not add instructions to the student; describe only what should appear in the picture.`);
   }
 
   // Clarify null fields based on toggles
@@ -84,24 +84,31 @@ export function buildRegenerateBlockMessage(
   return `Rewrite the following text. ${levelInstruction}
 Provide a different version from a previous attempt — keep the same meaning but use different words and sentence structures.
 
-Also set "visualHint" to a short caption-style description (about 25–90 words) for DALL·E 3: one or two sentences naming concrete, drawable content for this block only, using the original meaning in context so ambiguous curriculum words are clearly disambiguated. No student-facing instructions—only what should appear in the illustration.
+Also set "visualHint" to a short caption for DALL·E 3 (about 12–40 words): one main visual idea for this block only, minimal objects, no student-facing instructions—only what should appear. Use null if unclear.
 
 Original text: "${originalText}"
 
 Output as JSON matching the provided schema.`;
 }
 
-/** Truncate worksheet text for DALL·E 3 disambiguation (prompt budget). */
-const IMAGE_CONTEXT_MAX_CHARS = 500;
+/** Truncate worksheet text for DALL·E 3 disambiguation (keep prompt short so the image stays simple). */
+const IMAGE_CONTEXT_MAX_CHARS = 280;
 
 /**
- * Build a layered, caption-enhanced prompt for DALL·E 3 (Betker-style descriptive captions + instructional context).
+ * Build a layered prompt for DALL·E 3: strong emphasis on a single subject, negative space, few objects.
  */
+const MAX_VISUAL_HINT_CHARS = 420;
+
 export function buildDalle3ImagePrompt(
   visualHint: string,
   options?: { label?: string; instructionalContext?: string }
 ): string {
-  const styleBlock = `Educational illustration for grades 4–7 (science or social studies). Purpose: help a student understand the worksheet content. Visual style: clean, colorful, simple composition, friendly cartoon-like clarity; no text, letters, numbers, watermarks, or labels drawn in the image.`;
+  let hint = visualHint.trim();
+  if (hint.length > MAX_VISUAL_HINT_CHARS) {
+    hint = hint.slice(0, MAX_VISUAL_HINT_CHARS - 1) + "…";
+  }
+
+  const styleBlock = `Educational illustration for grades 4–7 (science or social studies). Single clear focal subject only—one main idea in the frame. Include at most one or two simple supporting objects if needed; do not crowd the scene. Generous empty space or a soft plain background (lots of negative space); avoid busy patterns, dense maps, collages, or many small labels. Style: clean, flat or soft shading, limited color palette, friendly and simple; no text, letters, numbers, watermarks, or labels drawn in the image.`;
 
   const parts: string[] = [styleBlock];
 
@@ -117,11 +124,11 @@ export function buildDalle3ImagePrompt(
         ? raw.slice(0, IMAGE_CONTEXT_MAX_CHARS - 1) + "…"
         : raw;
     parts.push(
-      `Instructional context (use to pick the correct curriculum meaning and avoid unrelated senses of the same words):\n${truncated}`
+      `Instructional context (disambiguate curriculum meaning only; do not add extra objects to the scene):\n${truncated}`
     );
   }
 
-  parts.push(`Primary image caption (what to draw):\n${visualHint.trim()}`);
+  parts.push(`What to draw (follow this closely; do not add elements not mentioned):\n${hint}`);
 
   return parts.join("\n\n");
 }
@@ -134,6 +141,47 @@ export function buildRegenerateSummaryMessage(
 Provide a different version from a previous attempt — keep the same key points but use different wording.
 
 Original text: "${originalText}"
+
+Output as JSON matching the provided schema.`;
+}
+
+/** User-selected phrase: simplify + optional visual hint (same JSON shape as block regen). */
+export function buildSnippetSimplifyMessage(
+  excerpt: string,
+  simplifyLevel: string
+): string {
+  const levelInstruction =
+    SIMPLIFY_INSTRUCTIONS[simplifyLevel] ?? SIMPLIFY_INSTRUCTIONS.G2;
+
+  return `A teacher selected this short excerpt from a worksheet (it may be a phrase, clause, or sentence).
+
+${levelInstruction}
+Rewrite ONLY this excerpt for the student. Keep the meaning; do not add facts not implied by the excerpt.
+
+Also set "visualHint" to a short caption for DALL·E 3 for this excerpt only (about 12–40 words, one main visual idea, few objects), or null if a diagram would not help.
+
+Excerpt: "${excerpt}"
+
+Output as JSON matching the provided schema.`;
+}
+
+/** Visual-only for a selected phrase. */
+export function buildSnippetVisualOnlyMessage(excerpt: string): string {
+  return `The teacher selected this excerpt from a worksheet. Write ONE short caption (about 12–40 words) for a single educational illustration (grades 4–7): one main subject, at most one or two simple supporting objects, plain background implied. No student-facing instructions—only what should appear in the picture.
+
+Excerpt: "${excerpt}"
+
+Output as JSON with only the field "visualHint" (string).`;
+}
+
+/** Short summary of a selected phrase. */
+export function buildSnippetSummaryMessage(
+  excerpt: string,
+  maxSentences: number
+): string {
+  return `The teacher selected this excerpt from a worksheet. Summarize what it means in at most ${maxSentences} short sentences for a student with learning differences. Stay faithful to the excerpt; do not invent content.
+
+Excerpt: "${excerpt}"
 
 Output as JSON matching the provided schema.`;
 }
@@ -212,6 +260,19 @@ export const REGENERATE_SUMMARY_JSON_SCHEMA = {
       sentences: { type: "array" as const, items: { type: "string" as const } },
     },
     required: ["sentences"],
+    additionalProperties: false,
+  },
+};
+
+export const REGENERATE_SNIPPET_VISUAL_JSON_SCHEMA = {
+  name: "snippet_visual",
+  strict: true,
+  schema: {
+    type: "object" as const,
+    properties: {
+      visualHint: { type: "string" as const },
+    },
+    required: ["visualHint"],
     additionalProperties: false,
   },
 };

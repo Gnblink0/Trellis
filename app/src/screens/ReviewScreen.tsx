@@ -165,6 +165,21 @@ export default function ReviewScreen() {
           <Text style={styles.imageLabel}>Original Worksheet</Text>
         </Pressable>
 
+        <Pressable
+          style={styles.scanCta}
+          onPress={() =>
+            navigation.navigate('ScanWorksheet', {
+              blocks,
+              meta: response.meta,
+              imageUri,
+            })
+          }
+        >
+          <Ionicons name="scan-outline" size={20} color={colors.primary} />
+          <Text style={styles.scanCtaText}>Select phrases (scan text)</Text>
+          <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
+        </Pressable>
+
         {/* Latency info */}
         <Text style={styles.metaText}>
           Processed in {(response.meta.latencyMs.total / 1000).toFixed(1)}s
@@ -346,6 +361,23 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
   },
   imageLabel: { ...typography.caption, color: colors.textSecondary },
+
+  scanCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.innerGapSmall,
+    backgroundColor: colors.surface,
+    borderRadius: radii.card,
+    paddingVertical: spacing.innerGapSmall,
+    paddingHorizontal: spacing.innerGap,
+    borderWidth: 1,
+    borderColor: colors.surfaceMuted,
+  },
+  scanCtaText: {
+    ...typography.bodySmall,
+    color: colors.primary,
+    flex: 1,
+  },
 
   metaText: {
     ...typography.caption,

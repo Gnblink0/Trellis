@@ -26,13 +26,20 @@ export interface RegenerateRequest {
 
 export type RegenerateTarget =
   | { type: 'block'; blockId: string }
-  | { type: 'summary' };
+  | { type: 'summary' }
+  /** Free-form selection from extracted worksheet text (not tied to a single block). */
+  | { type: 'snippet' };
+
+/** What to compute for a user-selected phrase (snippet target). */
+export type SnippetMode = 'simplify' | 'visual' | 'summary';
 
 export interface RegenerateContext {
   originalText: string;
   simplifyLevel?: 'G1' | 'G2';
   summaryMaxSentences?: number;
   language?: string;
+  /** Required when target.type === 'snippet'. */
+  mode?: SnippetMode;
 }
 
 // ===== Response Types =====
@@ -91,4 +98,18 @@ export type ApiErrorCode =
 export interface ApiError {
   code: ApiErrorCode;
   message: string;
+}
+
+// ── OCR (Live Text–style word boxes, normalized to image 0–1) ──
+
+export interface OcrWordBox {
+  text: string;
+  confidence: number;
+  bbox: { left: number; top: number; width: number; height: number };
+}
+
+export interface OcrScanResponse {
+  imageWidth: number;
+  imageHeight: number;
+  words: OcrWordBox[];
 }

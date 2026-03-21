@@ -1,10 +1,9 @@
 import { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView, Alert, Image, Platform } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, Image, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
 import { colors, typography, spacing, radii } from '../theme';
 import { RootStackParamList } from '../navigation/types';
 import {
@@ -40,35 +39,8 @@ export default function HomeScreen() {
     }, [loadRecents])
   );
 
-  const handleScanWorksheet = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      quality: 0.8,
-    });
-
-    if (result.canceled || !result.assets?.[0]) return;
-
-    navigation.navigate('Process', { imageUri: result.assets[0].uri });
-  };
-
-  const handleTakePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert(
-        'Camera Permission',
-        'Camera permission is needed to take worksheet photos.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-
-    const result = await ImagePicker.launchCameraAsync({
-      quality: 0.8,
-    });
-
-    if (result.canceled || !result.assets?.[0]) return;
-
-    navigation.navigate('Process', { imageUri: result.assets[0].uri });
+  const openWorksheetCapture = () => {
+    navigation.navigate('WorksheetCapture');
   };
 
   return (
@@ -90,29 +62,22 @@ export default function HomeScreen() {
         <View style={styles.hero}>
           <Text style={styles.heroTitle}>Snap a Worksheet</Text>
           <Text style={styles.heroSubtitle}>
-            Take a photo of any worksheet or textbook page to create an adapted
-            version in seconds.
+            Add one or more worksheet pages, crop each page if you like, then adapt the
+            combined worksheet in seconds.
           </Text>
         </View>
 
-        {/* Camera CTA */}
-        <Pressable
-          style={styles.cameraCta}
-          onPress={handleTakePhoto}
-        >
+        {/* Primary CTA */}
+        <Pressable style={styles.cameraCta} onPress={openWorksheetCapture}>
           <View style={styles.cameraIconCircle}>
             <Ionicons name="camera" size={32} color={colors.surface} />
           </View>
-          <Text style={styles.cameraLabel}>Take a photo</Text>
+          <Text style={styles.cameraLabel}>Add worksheet pages</Text>
         </Pressable>
 
-        {/* Gallery CTA */}
-        <Pressable
-          style={styles.galleryCta}
-          onPress={handleScanWorksheet}
-        >
+        <Pressable style={styles.galleryCta} onPress={openWorksheetCapture}>
           <Ionicons name="images-outline" size={20} color={colors.primary} />
-          <Text style={styles.galleryLabel}>Choose from library</Text>
+          <Text style={styles.galleryLabel}>Take photos or choose from library</Text>
         </Pressable>
 
         {/* Recent Worksheets */}
@@ -131,7 +96,10 @@ export default function HomeScreen() {
                   key={item.id}
                   style={styles.recentCard}
                   onPress={() =>
-                    navigation.navigate('Process', { imageUri: item.imageUri })
+                    navigation.navigate('OcrLiveText', {
+                      pageUris: [item.imageUri],
+                      worksheetId: item.id,
+                    })
                   }
                 >
                   <View style={styles.thumbnail}>
@@ -211,7 +179,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingTop: spacing.sectionGapTop,
     paddingBottom: spacing.sectionGapBottom,
-    gap: 16,
+    gap: spacing.innerGap,
   },
   heroTitle: {
     ...typography.display,
