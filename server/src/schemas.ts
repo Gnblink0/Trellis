@@ -26,6 +26,18 @@ export const processRequestSchema = z.object({
       language: z.string().optional(),
     })
     .optional(),
+  selectedBlockIds: z.array(z.string()).optional(),
+  selectedBlockTexts: z.record(z.string(), z.string()).optional(),
+});
+
+export const detectRequestSchema = z.object({
+  imageBase64: z
+    .string()
+    .min(1, "imageBase64 is required")
+    .refine(
+      (s) => s.startsWith("data:image/"),
+      "imageBase64 must be a data URI (data:image/...)"
+    ),
 });
 
 export const snippetModeSchema = z.enum(["simplify", "visual", "summary"]);
@@ -102,4 +114,22 @@ export const gptRegenerateSummarySchema = z.object({
 /** Visual-only adaptation for a user-selected phrase. */
 export const gptSnippetVisualSchema = z.object({
   visualHint: z.string(),
+});
+
+// ── Detect response validation ──
+
+export const gptDetectResponseSchema = z.object({
+  blocks: z.array(
+    z.object({
+      blockId: z.string(),
+      label: z.string(),
+      originalText: z.string(),
+      rect: z.object({
+        top: z.number(),
+        left: z.number(),
+        width: z.number(),
+        height: z.number(),
+      }),
+    })
+  ),
 });

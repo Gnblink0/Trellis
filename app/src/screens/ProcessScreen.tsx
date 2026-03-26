@@ -18,7 +18,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import * as FileSystem from 'expo-file-system/legacy';
 import { colors, typography, spacing, radii, shadows } from '../theme';
 import { RootStackParamList } from '../navigation/types';
-import { processWorksheet } from '../services/adaptApi';
+import { detectWorksheet } from '../services/adaptApi';
 import { registerWorksheetUse, updateRecentTitle } from '../services/recentWorksheets';
 import type { SimplifyLevel } from '@trellis/shared';
 
@@ -32,10 +32,9 @@ const SIMPLIFY_OPTIONS: { label: string; value: SimplifyLevel }[] = [
 ];
 
 const LOADING_STEPS = [
-  'Reading worksheet...',
-  'Simplifying text...',
-  'Generating summary...',
-  'Creating visual images...',
+  'Scanning worksheet...',
+  'Detecting text regions...',
+  'Mapping content zones...',
   'Almost done...',
 ];
 
@@ -130,18 +129,14 @@ export default function ProcessScreen() {
         imageBase64 = `data:image/jpeg;base64,${base64}`;
       }
 
-      // 4. Call API
-      const result = await processWorksheet({
-        imageBase64,
-        toggles: { visualSupport, simplifyLevel, summarize },
-        options: { summaryMaxSentences: 5, language: 'en' },
-      });
+      // 4. Call detect API
+      const result = await detectWorksheet({ imageBase64 });
 
       if (!result.ok) {
         if (Platform.OS === 'web') {
-          window.alert('Processing Failed\n' + result.error.message);
+          window.alert('Detection Failed\n' + result.error.message);
         } else {
-          Alert.alert('Processing Failed', result.error.message, [{ text: 'OK' }]);
+          Alert.alert('Detection Failed', result.error.message, [{ text: 'OK' }]);
         }
         return;
       }
@@ -152,10 +147,12 @@ export default function ProcessScreen() {
         await updateRecentTitle(wid, label || 'Worksheet');
       }
 
-      // 5. Navigate to Review
-      navigation.replace('Review', {
-        response: result.data,
+      // 5. Navigate to WorksheetView with detected blocks
+      navigation.replace('WorksheetView', {
+        blocks: result.data.blocks,
         imageUri: resolvedUri,
+        imageBase64,
+        toggles: { visualSupport, simplifyLevel, summarize },
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'An unexpected error occurred.';
@@ -276,8 +273,8 @@ export default function ProcessScreen() {
           onPress={handleProcess}
           disabled={!hasAtLeastOneToggle || !persistReady}
         >
-          <Ionicons name="sparkles" size={20} color={colors.surface} />
-          <Text style={styles.processBtnText}>Process Now</Text>
+          <Ionicons name="scan" size={20} color={colors.surface} />
+          <Text style={styles.processBtnText}>Detect & Adapt</Text>
         </Pressable>
       )}
     </SafeAreaView>

@@ -6,7 +6,6 @@ import ScanWorksheetScreen from '../screens/ScanWorksheetScreen';
 import OcrLiveTextScreen from '../screens/OcrLiveTextScreen';
 import WorksheetViewScreen from '../screens/WorksheetViewScreen';
 import ProcessScreen from '../screens/ProcessScreen';
-import ReviewScreen from '../screens/ReviewScreen';
 import StudentViewScreen from '../screens/StudentViewScreen';
 import ExportScreen from '../screens/ExportScreen';
 
@@ -23,7 +22,6 @@ export default function RootNavigator() {
       <Stack.Screen name="Home" component={HomeScreen} />
       <Stack.Screen name="WorksheetCapture" component={WorksheetCaptureScreen} />
       <Stack.Screen name="Process" component={ProcessScreen} />
-      <Stack.Screen name="Review" component={ReviewScreen} />
       <Stack.Screen name="ScanWorksheet" component={ScanWorksheetScreen} />
       <Stack.Screen name="OcrLiveText" component={OcrLiveTextScreen} />
       <Stack.Screen name="WorksheetView" component={WorksheetViewScreen} />

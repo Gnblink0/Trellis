@@ -1,4 +1,6 @@
 import type {
+  DetectRequest,
+  DetectResponse,
   ProcessRequest,
   ProcessResponse,
   RegenerateRequest,
@@ -59,6 +61,12 @@ async function request<T>(
   } finally {
     clearTimeout(timer);
   }
+}
+
+export function detectWorksheet(
+  body: DetectRequest
+): Promise<ApiResult<DetectResponse>> {
+  return request<DetectResponse>('/api/adapt/detect', body);
 }
 
 export function processWorksheet(

@@ -277,4 +277,59 @@ export const REGENERATE_SNIPPET_VISUAL_JSON_SCHEMA = {
   },
 };
 
-export { SYSTEM_PROMPT };
+// ── Detect-only prompt (Phase 1: fast OCR + region detection) ──
+
+const DETECT_SYSTEM_PROMPT = `You are an educational assistant. You will receive a photo of a worksheet. Your ONLY job is to:
+
+1. Identify every logical text section in the image (title, paragraphs, questions, instructions, etc.)
+2. Extract the original text exactly as it appears
+3. Estimate the position of each section as percentages of the full image dimensions
+
+IMPORTANT RULES:
+- Do NOT simplify, rewrite, or summarize any text
+- Each block must have a short descriptive label (e.g. "Title", "Paragraph 1", "Question 3")
+- Assign each block a unique blockId like "b1", "b2", etc.
+- For each block, estimate its bounding box as percentages: top, left, width, height (0-100)
+- Do not skip any text sections visible in the image`;
+
+export function buildDetectUserMessage(): string {
+  return `Analyze this worksheet photo. Identify all text regions and their positions. Output as JSON matching the provided schema.`;
+}
+
+export const DETECT_JSON_SCHEMA = {
+  name: "worksheet_detection",
+  strict: true,
+  schema: {
+    type: "object" as const,
+    properties: {
+      blocks: {
+        type: "array" as const,
+        items: {
+          type: "object" as const,
+          properties: {
+            blockId: { type: "string" as const },
+            label: { type: "string" as const },
+            originalText: { type: "string" as const },
+            rect: {
+              type: "object" as const,
+              properties: {
+                top: { type: "number" as const },
+                left: { type: "number" as const },
+                width: { type: "number" as const },
+                height: { type: "number" as const },
+              },
+              required: ["top", "left", "width", "height"],
+              additionalProperties: false,
+            },
+          },
+          required: ["blockId", "label", "originalText", "rect"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["blocks"],
+    additionalProperties: false,
+  },
+};
+
+export { SYSTEM_PROMPT, DETECT_SYSTEM_PROMPT };

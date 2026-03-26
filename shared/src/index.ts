@@ -1,4 +1,7 @@
 export type {
+  DetectRequest,
+  DetectedBlock,
+  DetectResponse,
   ProcessRequest,
   Toggles,
   SimplifyLevel,

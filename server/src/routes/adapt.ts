@@ -1,12 +1,16 @@
 import { Router, type Request, type Response } from "express";
 import OpenAI from "openai";
+import * as vision from "@google-cloud/vision";
 import type {
   ProcessResponse,
+  DetectResponse,
+  DetectedBlock,
   RegenerateResponse,
   ApiError,
 } from "@trellis/shared";
 import {
   processRequestSchema,
+  detectRequestSchema,
   regenerateRequestSchema,
   gptProcessResponseSchema,
   gptRegenerateBlockSchema,
@@ -43,6 +47,25 @@ function getOpenAI(): OpenAI {
     _openai = new OpenAI({ apiKey, timeout: 60_000 });
   }
   return _openai;
+}
+
+let _visionClient: vision.ImageAnnotatorClient | null = null;
+
+function getVisionClient(): vision.ImageAnnotatorClient {
+  if (!_visionClient) {
+    // Supports GOOGLE_APPLICATION_CREDENTIALS env var (path to service account JSON)
+    // or GOOGLE_CLOUD_API_KEY for API key auth
+    const apiKey = process.env.GOOGLE_CLOUD_API_KEY;
+    if (apiKey) {
+      _visionClient = new vision.ImageAnnotatorClient({
+        apiKey,
+      });
+    } else {
+      // Falls back to Application Default Credentials
+      _visionClient = new vision.ImageAnnotatorClient();
+    }
+  }
+  return _visionClient;
 }
 
 // ── Helpers ──
@@ -129,6 +152,141 @@ async function generateImage(
   }
 }
 
+// ── Google Vision helpers ──
+
+interface Vertex {
+  x?: number | null;
+  y?: number | null;
+}
+
+/**
+ * Convert Google Vision paragraph-level bounding boxes to percentage-based rects.
+ * Groups paragraphs into blocks, generates labels, and extracts original text.
+ */
+function visionBlocksToDetected(
+  annotation: vision.protos.google.cloud.vision.v1.ITextAnnotation
+): DetectedBlock[] {
+  const blocks: DetectedBlock[] = [];
+  let blockIndex = 0;
+
+  for (const page of annotation.pages ?? []) {
+    const pageWidth = page.width ?? 1;
+    const pageHeight = page.height ?? 1;
+
+    for (const block of page.blocks ?? []) {
+      for (const paragraph of block.paragraphs ?? []) {
+        // Extract text from words → symbols
+        const words: string[] = [];
+        for (const word of paragraph.words ?? []) {
+          const wordText = (word.symbols ?? [])
+            .map((s) => s.text ?? "")
+            .join("");
+          words.push(wordText);
+        }
+        const text = words.join(" ");
+        if (!text.trim()) continue;
+
+        // Compute bounding rect from vertices (as percentages)
+        const vertices: Vertex[] =
+          (paragraph.boundingBox?.vertices as Vertex[]) ?? [];
+        if (vertices.length < 4) continue;
+
+        const xs = vertices.map((v) => v.x ?? 0);
+        const ys = vertices.map((v) => v.y ?? 0);
+        const minX = Math.min(...xs);
+        const minY = Math.min(...ys);
+        const maxX = Math.max(...xs);
+        const maxY = Math.max(...ys);
+
+        blockIndex++;
+        const blockId = `b${blockIndex}`;
+
+        // Generate a label based on text content
+        let label: string;
+        const trimmed = text.trim();
+        if (trimmed.length <= 30) {
+          label = trimmed;
+        } else if (trimmed.endsWith("?")) {
+          label = `Question ${blockIndex}`;
+        } else if (blockIndex === 1) {
+          label = "Title";
+        } else {
+          label = `Paragraph ${blockIndex}`;
+        }
+
+        blocks.push({
+          blockId,
+          label,
+          originalText: text,
+          rect: {
+            top: (minY / pageHeight) * 100,
+            left: (minX / pageWidth) * 100,
+            width: ((maxX - minX) / pageWidth) * 100,
+            height: ((maxY - minY) / pageHeight) * 100,
+          },
+        });
+      }
+    }
+  }
+
+  return blocks;
+}
+
+// ── POST /api/adapt/detect ──
+
+adaptRouter.post("/detect", async (req: Request, res: Response) => {
+  const startTime = Date.now();
+
+  // 1. Validate request
+  const parsed = detectRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return sendError(res, 400, {
+      code: "VALIDATION_ERROR",
+      message: parsed.error.issues.map((i) => i.message).join("; "),
+    });
+  }
+
+  const { imageBase64 } = parsed.data;
+
+  // Strip data URI prefix
+  const rawBase64 = imageBase64.replace(/^data:image\/[a-zA-Z+]+;base64,/, "");
+
+  try {
+    // 2. Call Google Cloud Vision DOCUMENT_TEXT_DETECTION
+    const client = getVisionClient();
+    const [result] = await client.documentTextDetection({
+      image: { content: rawBase64 },
+    });
+
+    const annotation = result.fullTextAnnotation;
+    if (!annotation || !annotation.pages?.length) {
+      // No text detected — return empty blocks
+      const totalMs = Date.now() - startTime;
+      const response: DetectResponse = { blocks: [], meta: { latencyMs: totalMs } };
+      console.log(`[adapt/detect] No text found (${totalMs}ms)`);
+      return res.json(response);
+    }
+
+    // 3. Convert Vision paragraphs to DetectedBlock[]
+    const blocks = visionBlocksToDetected(annotation);
+
+    const totalMs = Date.now() - startTime;
+    const response: DetectResponse = {
+      blocks,
+      meta: { latencyMs: totalMs },
+    };
+
+    console.log(`[adapt/detect] Completed in ${totalMs}ms — ${blocks.length} blocks (Google Vision)`);
+    return res.json(response);
+  } catch (err) {
+    console.error("[adapt/detect] Google Vision error:", err);
+    return sendError(res, 500, {
+      code: "INTERNAL_ERROR",
+      message: err instanceof Error ? err.message : "Google Vision API error.",
+    });
+  }
+});
+
 // ── POST /api/adapt/process ──
 
 adaptRouter.post("/process", async (req: Request, res: Response) => {
@@ -143,11 +301,23 @@ adaptRouter.post("/process", async (req: Request, res: Response) => {
     });
   }
 
-  const { imageBase64, toggles, options } = parsed.data;
+  const { imageBase64, toggles, options, selectedBlockIds, selectedBlockTexts } = parsed.data;
   const summaryMaxSentences = options?.summaryMaxSentences ?? 5;
 
   // 2. Build prompt
-  const userMessage = buildProcessUserMessage(toggles, summaryMaxSentences);
+  let userMessage = buildProcessUserMessage(toggles, summaryMaxSentences);
+
+  // If selectedBlockTexts provided, include exact original text so GPT processes the right blocks
+  // (avoids block ID mismatch between detect and process phases)
+  if (selectedBlockTexts && Object.keys(selectedBlockTexts).length > 0) {
+    const blockDescriptions = Object.entries(selectedBlockTexts)
+      .map(([id, text]) => `- blockId: "${id}"\n  originalText: "${text}"`)
+      .join("\n");
+    userMessage += `\n\nIMPORTANT: Process ONLY the following text block(s). Use the provided blockId and match the original text exactly as given. Do not re-detect or re-assign block IDs.\n${blockDescriptions}\n\nReturn only these blocks in the response. Do not include any other blocks.`;
+  } else if (selectedBlockIds && selectedBlockIds.length > 0) {
+    // Fallback: ID-only filtering (less reliable, kept for backward compatibility)
+    userMessage += `\n\nIMPORTANT: Only process the text regions with these block IDs: ${selectedBlockIds.join(", ")}. Return these blocks with full processing. Skip all other blocks entirely — do not include them in the output.`;
+  }
 
   // Strip the data URI prefix for OpenAI — extract media type and base64 data
   const mediaTypeMatch = imageBase64.match(/^data:(image\/[a-zA-Z+]+);base64,/);

@@ -1,9 +1,28 @@
 // ===== Request Types =====
 
+export interface DetectRequest {
+  imageBase64: string;
+}
+
+export interface DetectedBlock {
+  blockId: string;
+  label: string;
+  originalText: string;
+  rect: { top: number; left: number; width: number; height: number };
+}
+
+export interface DetectResponse {
+  blocks: DetectedBlock[];
+  meta: { latencyMs: number };
+}
+
 export interface ProcessRequest {
   imageBase64: string;
   toggles: Toggles;
   options?: ProcessOptions;
+  selectedBlockIds?: string[];
+  /** Map of blockId → originalText, used for zone-by-zone processing to avoid re-detection mismatch */
+  selectedBlockTexts?: Record<string, string>;
 }
 
 export interface Toggles {
