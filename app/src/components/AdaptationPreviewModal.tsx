@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, Pressable, ScrollView, Modal } from 'react-native';
+import { View, Text, Image, StyleSheet, Pressable, ScrollView, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, typography, spacing, radii, shadows } from '../theme';
 
@@ -6,11 +6,13 @@ type AdaptationType = 'simplify' | 'visuals' | 'summarize';
 
 type Adaptation = {
   action: AdaptationType;
+  state?: 'loading' | 'ready' | 'reviewed' | 'error';
   original: string;
   result: string;
   keywords?: string[];
   visuals?: string[];
   bullets?: string[];
+  visualUrl?: string;
 };
 
 type Props = {
@@ -26,9 +28,9 @@ const ACTION_META: Record<
   AdaptationType,
   { label: string; icon: keyof typeof Ionicons.glyphMap; color: string }
 > = {
-  simplify: { label: 'Simplified', icon: 'text', color: colors.primary },
-  visuals: { label: 'Visuals', icon: 'image', color: '#8B5CF6' },
-  summarize: { label: 'Summary', icon: 'list', color: '#10B981' },
+  simplify: { label: 'Simplified', icon: 'text', color: colors.actionSimplify },
+  visuals: { label: 'Visuals', icon: 'image', color: colors.actionVisuals },
+  summarize: { label: 'Summary', icon: 'list', color: colors.actionSummarize },
 };
 
 export default function AdaptationPreviewModal({
@@ -50,8 +52,10 @@ export default function AdaptationPreviewModal({
       animationType="fade"
       onRequestClose={onCancel}
     >
-      <Pressable style={styles.overlay} onPress={onCancel}>
-        <Pressable style={styles.modal} onPress={(e) => e.stopPropagation()}>
+      <View style={styles.overlay}>
+        {/* Background dismiss layer — sits behind the modal */}
+        <Pressable style={StyleSheet.absoluteFill} onPress={onCancel} />
+        <View style={styles.modal}>
           {/* Header */}
           <View style={styles.header}>
             <View style={styles.titleRow}>
@@ -76,7 +80,19 @@ export default function AdaptationPreviewModal({
 
             <Text style={styles.label}>{meta.label}</Text>
             <View style={[styles.resultBlock, { backgroundColor: `${meta.color}20` }]}>
-              <Text style={styles.resultText}>{adaptation.result}</Text>
+              {/* For summary: show bullets inside the block; otherwise show result text */}
+              {adaptation.bullets && adaptation.bullets.length > 0 ? (
+                <View style={styles.bulletList}>
+                  {adaptation.bullets.map((b) => (
+                    <View key={b} style={styles.bulletRow}>
+                      <Text style={[styles.bulletDot, { color: meta.color }]}>•</Text>
+                      <Text style={styles.bulletText}>{b}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.resultText}>{adaptation.result}</Text>
+              )}
             </View>
 
             {/* Keywords */}
@@ -93,27 +109,24 @@ export default function AdaptationPreviewModal({
               </>
             )}
 
-            {/* Bullets */}
-            {adaptation.bullets && adaptation.bullets.length > 0 && (
-              <View style={styles.bulletList}>
-                {adaptation.bullets.map((b) => (
-                  <View key={b} style={styles.bulletRow}>
-                    <Text style={[styles.bulletDot, { color: meta.color }]}>•</Text>
-                    <Text style={styles.bulletText}>{b}</Text>
-                  </View>
-                ))}
-              </View>
-            )}
-
-            {/* Visuals */}
-            {adaptation.visuals && adaptation.visuals.length > 0 && (
-              <View style={styles.visualsList}>
-                {adaptation.visuals.map((v) => (
-                  <View key={v} style={styles.visualItem}>
-                    <Text style={styles.visualText}>{v}</Text>
-                  </View>
-                ))}
-              </View>
+            {/* Generated image (visuals action) */}
+            {adaptation.visualUrl ? (
+              <Image
+                source={{ uri: adaptation.visualUrl }}
+                style={styles.visualImage}
+                resizeMode="contain"
+              />
+            ) : (
+              /* Fallback: show visual hint text only when no image was generated */
+              adaptation.visuals && adaptation.visuals.length > 0 ? (
+                <View style={styles.visualsList}>
+                  {adaptation.visuals.map((v) => (
+                    <View key={v} style={styles.visualItem}>
+                      <Text style={styles.visualText}>{v}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null
             )}
           </ScrollView>
 
@@ -129,8 +142,8 @@ export default function AdaptationPreviewModal({
               <Text style={styles.applyBtnText}>Apply</Text>
             </Pressable>
           </View>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
@@ -155,7 +168,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: spacing.pagePadding,
+    paddingHorizontal: spacing.innerGap,
+    paddingVertical: spacing.innerGapSmall,
     borderBottomWidth: 1,
     borderBottomColor: colors.surfaceMuted,
   },
@@ -171,38 +185,39 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   closeBtn: {
-    width: 40,
-    height: 40,
+    width: 32,
+    height: 32,
     borderRadius: radii.circle,
     backgroundColor: colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
   },
   scroll: {
-    padding: spacing.pagePadding,
+    paddingHorizontal: spacing.innerGap,
+    paddingVertical: spacing.innerGapSmall,
   },
   label: {
     ...typography.overline,
     color: colors.textSecondary,
-    marginBottom: spacing.innerGapSmall,
-    marginTop: spacing.innerGap,
+    marginBottom: 4,
+    marginTop: spacing.innerGapSmall,
   },
   originalBlock: {
     backgroundColor: colors.surfaceMuted,
     borderRadius: radii.chip,
-    padding: spacing.innerGap,
+    padding: spacing.innerGapSmall,
   },
   originalText: {
-    ...typography.body,
+    ...typography.bodySmall,
     color: colors.textSecondary,
   },
   arrowRow: {
     alignItems: 'center',
-    marginVertical: spacing.innerGap,
+    marginVertical: 6,
   },
   resultBlock: {
     borderRadius: radii.chip,
-    padding: spacing.innerGap,
+    padding: spacing.innerGapSmall,
   },
   resultText: {
     ...typography.body,
@@ -216,8 +231,8 @@ const styles = StyleSheet.create({
   },
   keywordChip: {
     borderRadius: radii.circle,
-    paddingHorizontal: spacing.innerGap,
-    paddingVertical: 6,
+    paddingHorizontal: spacing.innerGapSmall,
+    paddingVertical: 4,
   },
   keywordText: {
     ...typography.caption,
@@ -252,10 +267,17 @@ const styles = StyleSheet.create({
     ...typography.bodySmall,
     color: colors.textSecondary,
   },
+  visualImage: {
+    width: '100%',
+    aspectRatio: 1,
+    borderRadius: radii.chip,
+    marginTop: spacing.innerGap,
+  },
   actions: {
     flexDirection: 'row',
     gap: spacing.innerGapSmall,
-    padding: spacing.pagePadding,
+    paddingHorizontal: spacing.innerGap,
+    paddingVertical: spacing.innerGapSmall,
     borderTopWidth: 1,
     borderTopColor: colors.surfaceMuted,
   },
@@ -264,8 +286,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.innerGapSmall,
-    paddingHorizontal: spacing.pagePadding,
-    paddingVertical: spacing.innerGap,
+    paddingHorizontal: spacing.innerGap,
+    paddingVertical: spacing.innerGapSmall,
     borderRadius: radii.chip,
     backgroundColor: colors.surfaceMuted,
   },
@@ -279,8 +301,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing.innerGapSmall,
-    paddingHorizontal: spacing.pagePadding,
-    paddingVertical: spacing.innerGap,
+    paddingHorizontal: spacing.innerGap,
+    paddingVertical: spacing.innerGapSmall,
     borderRadius: radii.chip,
   },
   applyBtnText: {

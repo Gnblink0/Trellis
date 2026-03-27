@@ -18,6 +18,16 @@ export const colors = {
   warning: '#FFF8E1',
   warningText: '#8B7335',
   error: '#F4845F',
+  /** Orange-red notification dot for markers needing review. */
+  markerNotification: '#F4845F',
+
+  // Adaptation actions
+  /** Simplify action — blue for readability. */
+  actionSimplify: '#3B82F6',
+  /** Visuals action — warm amber for imagery. */
+  actionVisuals: '#E67E22',
+  /** Summarize action — green for conciseness. */
+  actionSummarize: '#10B981',
 
   // Overlays
   scrim: '#00000059',

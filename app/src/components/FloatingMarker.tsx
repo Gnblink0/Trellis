@@ -8,16 +8,19 @@ import {
   Animated,
   ScrollView,
   Dimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, typography, spacing, radii, shadows } from '../theme';
 
 type AdaptationType = 'simplify' | 'visuals' | 'summarize';
+export type MarkerState = 'loading' | 'ready' | 'reviewed';
 
 export type MarkerData = {
   id: string;
   type: AdaptationType;
   label: string;
+  state: MarkerState;
   position: { x: number; y: number }; // Position relative to worksheet (percentage)
   content: {
     original: string;
@@ -26,7 +29,7 @@ export type MarkerData = {
     bullets?: string[];
     visuals?: string[];
     visualUrl?: string;
-  };
+  } | null; // null while loading
 };
 
 type Props = {
@@ -34,15 +37,16 @@ type Props = {
   worksheetWidth: number;
   worksheetHeight: number;
   onDragEnd?: (id: string, position: { x: number; y: number }) => void;
+  onPress?: (marker: MarkerData) => void;
 };
 
 const ACTION_META: Record<
   AdaptationType,
   { label: string; icon: keyof typeof Ionicons.glyphMap; color: string }
 > = {
-  simplify: { label: 'Simplified', icon: 'text', color: colors.primary },
-  visuals: { label: 'Visuals', icon: 'image', color: '#8B5CF6' },
-  summarize: { label: 'Summary', icon: 'list', color: '#10B981' },
+  simplify: { label: 'Simplified', icon: 'text', color: colors.actionSimplify },
+  visuals: { label: 'Visuals', icon: 'image', color: colors.actionVisuals },
+  summarize: { label: 'Summary', icon: 'list', color: colors.actionSummarize },
 };
 
 export default function FloatingMarker({
@@ -50,15 +54,44 @@ export default function FloatingMarker({
   worksheetWidth,
   worksheetHeight,
   onDragEnd,
+  onPress,
 }: Props) {
   const [isExpanded, setIsExpanded] = useState(false);
   const expandAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const notifAnim = useRef(new Animated.Value(1)).current;
 
   const meta = ACTION_META[marker.type];
 
   // Calculate absolute position from percentage
   const absoluteX = (marker.position.x / 100) * worksheetWidth;
   const absoluteY = (marker.position.y / 100) * worksheetHeight;
+
+  // Loading pulse animation (skip for reviewed — no Animated.View used)
+  useEffect(() => {
+    if (marker.state !== 'loading') return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1.15, duration: 600, useNativeDriver: true }),
+        Animated.timing(pulseAnim, { toValue: 0.9, duration: 600, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [marker.state]);
+
+  // Ready notification dot breathing animation (skip for reviewed)
+  useEffect(() => {
+    if (marker.state !== 'ready') return;
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(notifAnim, { toValue: 0.5, duration: 800, useNativeDriver: true }),
+        Animated.timing(notifAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [marker.state]);
 
   useEffect(() => {
     Animated.spring(expandAnim, {
@@ -69,7 +102,14 @@ export default function FloatingMarker({
     }).start();
   }, [isExpanded]);
 
-  const toggleExpanded = () => {
+  const handleBadgePress = () => {
+    if (marker.state === 'loading') return; // no-op while loading
+    if (marker.state === 'ready') {
+      // Delegate to parent to open preview modal
+      onPress?.(marker);
+      return;
+    }
+    // reviewed: toggle inline popup
     setIsExpanded(!isExpanded);
   };
 
@@ -77,6 +117,8 @@ export default function FloatingMarker({
   const screenWidth = Dimensions.get('window').width;
   const bubbleWidth = 280;
   const showBubbleOnLeft = absoluteX > screenWidth / 2;
+
+  const isLoading = marker.state === 'loading';
 
   return (
     <>
@@ -97,84 +139,118 @@ export default function FloatingMarker({
           },
         ]}
       >
-        {/* Badge button */}
-        <Pressable
-          style={[styles.badge, { backgroundColor: meta.color }]}
-          onPress={toggleExpanded}
-        >
-          <Ionicons name={meta.icon} size={16} color={colors.surface} />
-        </Pressable>
+        {/* Badge button — only use Animated.View for loading/ready (avoids Reanimated conflicts for static reviewed markers) */}
+        {marker.state === 'reviewed' ? (
+          <View>
+            <Pressable
+              style={[styles.badge, { backgroundColor: meta.color }]}
+              onPress={handleBadgePress}
+            >
+              <Ionicons name={meta.icon} size={16} color={colors.surface} />
+            </Pressable>
+          </View>
+        ) : (
+          <Animated.View
+            style={[
+              { transform: [{ scale: pulseAnim }] },
+              isLoading && { opacity: 0.7 },
+            ]}
+          >
+            <Pressable
+              style={[styles.badge, { backgroundColor: meta.color }]}
+              onPress={handleBadgePress}
+            >
+              {isLoading ? (
+                <ActivityIndicator size="small" color={colors.surface} />
+              ) : (
+                <Ionicons name={meta.icon} size={16} color={colors.surface} />
+              )}
+            </Pressable>
 
-        {/* Popup bubble */}
-        <Animated.View
-        style={[
-          styles.bubble,
-          {
-            width: bubbleWidth,
-            [showBubbleOnLeft ? 'right' : 'left']: 36, // Position next to badge
-            opacity: expandAnim,
-            transform: [
-              {
-                scale: expandAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [0.8, 1],
-                }),
-              },
-              {
-                translateY: expandAnim.interpolate({
-                  inputRange: [0, 1],
-                  outputRange: [-10, 0],
-                }),
-              },
-            ],
-          },
-        ]}
-        pointerEvents={isExpanded ? 'auto' : 'none'}
-      >
-        {/* Triangle pointer */}
-        <View
+            {/* Notification dot for "ready" state */}
+            {marker.state === 'ready' && (
+              <Animated.View
+                style={[
+                  styles.notificationDot,
+                  { opacity: notifAnim },
+                ]}
+              />
+            )}
+          </Animated.View>
+        )}
+
+        {/* Popup bubble — only for reviewed markers with content */}
+        {marker.state === 'reviewed' && marker.content && (
+          <Animated.View
           style={[
-            styles.triangle,
-            showBubbleOnLeft ? styles.triangleRight : styles.triangleLeft,
+            styles.bubble,
+            {
+              width: bubbleWidth,
+              [showBubbleOnLeft ? 'right' : 'left']: 36, // Position next to badge
+              opacity: expandAnim,
+              transform: [
+                {
+                  scale: expandAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.8, 1],
+                  }),
+                },
+                {
+                  translateY: expandAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-10, 0],
+                  }),
+                },
+              ],
+            },
           ]}
-        />
-
-        {/* Bubble header */}
-        <View style={styles.bubbleHeader}>
-          <View style={styles.bubbleTitleRow}>
-            <Ionicons name={meta.icon} size={16} color={meta.color} />
-            <Text style={styles.bubbleTitle} numberOfLines={1}>
-              {marker.label}
-            </Text>
-          </View>
-          <Pressable onPress={toggleExpanded} style={styles.bubbleClose}>
-            <Ionicons name="close" size={18} color={colors.textSecondary} />
-          </Pressable>
-        </View>
-
-        {/* Bubble content */}
-        <ScrollView
-          style={styles.bubbleScroll}
-          showsVerticalScrollIndicator={false}
+          pointerEvents={isExpanded ? 'auto' : 'none'}
         >
-          <Text style={styles.bubbleLabel}>Original</Text>
-          <View style={styles.bubbleTextBlock}>
-            <Text style={styles.bubbleOriginalText}>{marker.content.original}</Text>
+          {/* Triangle pointer */}
+          <View
+            style={[
+              styles.triangle,
+              showBubbleOnLeft ? styles.triangleRight : styles.triangleLeft,
+            ]}
+          />
+
+          {/* Bubble header */}
+          <View style={styles.bubbleHeader}>
+            <View style={styles.bubbleTitleRow}>
+              <Ionicons name={meta.icon} size={16} color={meta.color} />
+              <Text style={styles.bubbleTitle} numberOfLines={1}>
+                {marker.label}
+              </Text>
+            </View>
+            <Pressable onPress={() => setIsExpanded(false)} style={styles.bubbleClose}>
+              <Ionicons name="close" size={18} color={colors.textSecondary} />
+            </Pressable>
           </View>
 
-          <View style={styles.arrowRow}>
-            <Ionicons name="arrow-down" size={16} color={meta.color} />
-          </View>
+          {/* Bubble content */}
+          <ScrollView
+            style={styles.bubbleScroll}
+            showsVerticalScrollIndicator={false}
+          >
+            {/* Result block */}
+            <View style={[styles.bubbleResultBlock, { backgroundColor: `${meta.color}20` }]}>
+              {/* Summary: bullets inside block */}
+              {marker.content.bullets && marker.content.bullets.length > 0 ? (
+                <View style={styles.bulletList}>
+                  {marker.content.bullets.map((b) => (
+                    <View key={b} style={styles.bulletRow}>
+                      <Text style={[styles.bulletDot, { color: meta.color }]}>•</Text>
+                      <Text style={styles.bulletText}>{b}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.bubbleResultText}>{marker.content.result}</Text>
+              )}
+            </View>
 
-          <Text style={styles.bubbleLabel}>{meta.label}</Text>
-          <View style={[styles.bubbleResultBlock, { backgroundColor: `${meta.color}20` }]}>
-            <Text style={styles.bubbleResultText}>{marker.content.result}</Text>
-          </View>
-
-          {/* Keywords */}
-          {marker.content.keywords && marker.content.keywords.length > 0 && (
-            <>
-              <Text style={styles.bubbleLabel}>Key Words</Text>
+            {/* Keywords */}
+            {marker.content.keywords && marker.content.keywords.length > 0 && (
               <View style={styles.keywordsRow}>
                 {marker.content.keywords.map((w) => (
                   <View key={w} style={[styles.keywordChip, { backgroundColor: `${meta.color}20` }]}>
@@ -182,47 +258,29 @@ export default function FloatingMarker({
                   </View>
                 ))}
               </View>
-            </>
-          )}
+            )}
 
-          {/* Bullets */}
-          {marker.content.bullets && marker.content.bullets.length > 0 && (
-            <View style={styles.bulletList}>
-              {marker.content.bullets.map((b) => (
-                <View key={b} style={styles.bulletRow}>
-                  <Text style={[styles.bulletDot, { color: meta.color }]}>•</Text>
-                  <Text style={styles.bulletText}>{b}</Text>
-                </View>
-              ))}
-            </View>
-          )}
-
-          {/* Visual Support Image */}
-          {marker.content.visualUrl && (
-            <>
-              <Text style={styles.bubbleLabel}>Visual</Text>
+            {/* Visual image or fallback hints */}
+            {marker.content.visualUrl ? (
               <Image
                 source={{ uri: marker.content.visualUrl }}
                 style={styles.bubbleVisualImage}
                 resizeMode="contain"
               />
-            </>
-          )}
-
-          {/* Text-based visual hints (fallback) */}
-          {!marker.content.visualUrl &&
-            marker.content.visuals &&
-            marker.content.visuals.length > 0 && (
-            <View style={styles.visualsList}>
-              {marker.content.visuals.map((v) => (
-                <View key={v} style={styles.visualItem}>
-                  <Text style={styles.visualText}>{v}</Text>
+            ) : (
+              marker.content.visuals && marker.content.visuals.length > 0 && (
+                <View style={styles.visualsList}>
+                  {marker.content.visuals.map((v) => (
+                    <View key={v} style={styles.visualItem}>
+                      <Text style={styles.visualText}>{v}</Text>
+                    </View>
+                  ))}
                 </View>
-              ))}
-            </View>
-          )}
-        </ScrollView>
-        </Animated.View>
+              )
+            )}
+          </ScrollView>
+          </Animated.View>
+        )}
       </View>
     </>
   );
@@ -248,6 +306,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     ...shadows.floatingToolbar,
+  },
+  notificationDot: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.markerNotification,
+    borderWidth: 1.5,
+    borderColor: colors.surface,
   },
 
   // Bubble styles
@@ -308,25 +377,6 @@ const styles = StyleSheet.create({
   bubbleScroll: {
     maxHeight: 300,
   },
-  bubbleLabel: {
-    ...typography.overline,
-    color: colors.textSecondary,
-    marginBottom: 4,
-    marginTop: spacing.innerGapSmall,
-  },
-  bubbleTextBlock: {
-    backgroundColor: colors.surfaceMuted,
-    borderRadius: radii.chip,
-    padding: spacing.innerGapSmall,
-  },
-  bubbleOriginalText: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
-  },
-  arrowRow: {
-    alignItems: 'center',
-    marginVertical: spacing.innerGapSmall,
-  },
   bubbleResultBlock: {
     borderRadius: radii.chip,
     padding: spacing.innerGapSmall,
@@ -339,7 +389,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 4,
-    marginTop: 4,
+    marginTop: spacing.innerGapSmall,
   },
   keywordChip: {
     borderRadius: radii.circle,
@@ -381,7 +431,8 @@ const styles = StyleSheet.create({
   },
   bubbleVisualImage: {
     width: '100%',
-    height: 150,
+    aspectRatio: 1,
+    maxHeight: 180,
     borderRadius: radii.chip,
     backgroundColor: colors.surfaceMuted,
     marginTop: spacing.innerGapSmall,

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -12,26 +12,35 @@ import {
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, typography, spacing, radii, shadows } from '../theme';
 import { RootStackParamList, AdaptedZone } from '../navigation/types';
 import ScreenHeader from '../components/ScreenHeader';
-import DrawingCanvas, { DrawingTool, DrawingData } from '../components/DrawingCanvas';
+import DrawingCanvas from '../components/DrawingCanvas';
+import type { DrawingTool, DrawingData } from '../components/DrawingCanvas';
 import DrawingToolbar from '../components/DrawingToolbar';
 import FloatingMarker, { MarkerData } from '../components/FloatingMarker';
+import { consumeStudentViewData } from '../services/studentViewStore';
 
 // Native-only imports (ViewShot, MediaLibrary, Sharing)
-let ViewShot: any = View; // fallback to View on web
+let ViewShot: any = View; // fallback to View on web/Expo Go
 let MediaLibrary: any = null;
 let Sharing: any = null;
 if (Platform.OS !== 'web') {
-  ViewShot = require('react-native-view-shot').default;
-  MediaLibrary = require('expo-media-library');
-  Sharing = require('expo-sharing');
+  try {
+    ViewShot = require('react-native-view-shot').default;
+  } catch {
+    // react-native-view-shot unavailable (Expo Go) — export disabled
+  }
+  try {
+    MediaLibrary = require('expo-media-library');
+    Sharing = require('expo-sharing');
+  } catch {
+    // expo-media-library / expo-sharing unavailable
+  }
 }
 
-type Route = RouteProp<RootStackParamList, 'StudentView'>;
 
 // ---------------------------------------------------------------------------
 // Pages (same images as teacher view)
@@ -66,22 +75,36 @@ const PAGES: PageDef[] = [
   },
 ];
 
-const IMAGE_ASPECT = 595 / 842;
+const DEMO_IMAGE_ASPECT = 595 / 842; // fallback for bundled demo worksheet
 
 // ---------------------------------------------------------------------------
 // Main student screen
 // ---------------------------------------------------------------------------
 export default function StudentViewScreen() {
   const navigation = useNavigation();
-  const route = useRoute<Route>();
 
-  const title = route.params?.title ?? 'Worksheet';
-  const adaptations = route.params?.adaptations ?? [];
-  const imageUri = route.params?.imageUri;
+  // Read large data from module store (avoids React Navigation param serialisation crash)
+  const [storeData] = useState(() => consumeStudentViewData());
+  const title = storeData?.title ?? 'Worksheet';
+  const adaptations = storeData?.adaptations ?? [];
+  const imageUri = storeData?.imageUri;
 
   const [pageIndex, setPageIndex] = useState(0);
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
+  // null = not yet resolved (real mode); number = ready
+  const [imageAspect, setImageAspect] = useState<number | null>(imageUri ? null : DEMO_IMAGE_ASPECT);
+  const [containerWidth, setContainerWidth] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+
+  // Resolve real image aspect ratio (blocks rendering until ready)
+  useEffect(() => {
+    if (!imageUri) { setImageAspect(DEMO_IMAGE_ASPECT); return; }
+    Image.getSize(
+      imageUri,
+      (w, h) => setImageAspect(w > 0 && h > 0 ? w / h : DEMO_IMAGE_ASPECT),
+      () => setImageAspect(DEMO_IMAGE_ASPECT),
+    );
+  }, [imageUri]);
 
   // Drawing state
   const [drawingTool, setDrawingTool] = useState<DrawingTool>('pen');
@@ -101,9 +124,15 @@ export default function StudentViewScreen() {
   };
 
   const handleImageLayout = (e: LayoutChangeEvent) => {
-    const { width } = e.nativeEvent.layout;
-    setImageSize({ width, height: width / IMAGE_ASPECT });
+    setContainerWidth(e.nativeEvent.layout.width);
   };
+
+  // (Re)calculate image dimensions when container width or aspect ratio is known
+  useEffect(() => {
+    if (containerWidth > 0 && imageAspect != null && imageAspect > 0) {
+      setImageSize({ width: containerWidth, height: containerWidth / imageAspect });
+    }
+  }, [imageAspect, containerWidth]);
 
   // Zone data from WorksheetViewScreen
   const ZONE_POSITIONS: Record<string, { top: number; left: number; width: number; height: number }> = {
@@ -115,33 +144,31 @@ export default function StudentViewScreen() {
     precipitation: { top: 27, left: 51, width: 46, height: 56 },
   };
 
-  // Convert adaptations to markers with proper positions
+  // Convert adaptations to markers — position at zone center (same as WorksheetViewScreen)
   const markers: MarkerData[] =
     pageIndex === 0
       ? adaptations.map((a, index) => {
           const zoneRect = a.rect ?? ZONE_POSITIONS[a.zoneId];
-          // AI pipeline with rect: use exact GPT-4o coordinates (right edge of block)
-          // AI pipeline without rect: distribute evenly along right edge
-          // Legacy hardcoded zones: use zone center
+
           const basePosition = zoneRect
             ? {
-                x: 93,                                   // fixed right column, avoids overflow
-                y: zoneRect.top + zoneRect.height / 2,   // vertical center from GPT-4o rect
+                x: zoneRect.left + zoneRect.width / 2,
+                y: zoneRect.top + zoneRect.height / 2,
               }
             : {
-                x: 93,
+                x: 50,
                 y: Math.round((index + 0.5) * (100 / adaptations.length)),
               };
 
-          // Offset slightly for multiple markers on same zone (legacy path only)
-          const sameZoneIndex = zoneRect
-            ? adaptations.slice(0, index).filter((prev) => prev.zoneId === a.zoneId).length
-            : 0;
+          // Offset slightly for multiple markers on same zone
+          const sameZoneIndex = adaptations.slice(0, index)
+            .filter((prev) => prev.zoneId === a.zoneId).length;
 
           return {
             id: `${a.zoneId}-${a.action}`,
             type: a.action,
             label: a.zoneLabel,
+            state: 'reviewed' as const,
             position: {
               x: basePosition.x + sameZoneIndex * 3,
               y: basePosition.y + sameZoneIndex * 3,
@@ -332,14 +359,24 @@ export default function StudentViewScreen() {
                 /* Export mode: render page(s) for capture */
                 imageUri ? (
                   <View style={styles.imageWrapper}>
-                    <Image source={{ uri: imageUri }} style={styles.worksheetImage} resizeMode="contain" />
+                    <Image
+                      source={{ uri: imageUri }}
+                      style={[
+                        styles.worksheetImage,
+                        imageSize.height > 0 && { height: imageSize.height },
+                      ]}
+                      resizeMode="contain"
+                    />
                   </View>
                 ) : (
                 PAGES.map((page, pi) => (
                   <View key={pi} style={styles.imageWrapper}>
                     <Image
                       source={page.image}
-                      style={styles.worksheetImage}
+                      style={[
+                        styles.worksheetImage,
+                        imageSize.height > 0 && { height: imageSize.height },
+                      ]}
                       resizeMode="contain"
                     />
                   </View>
