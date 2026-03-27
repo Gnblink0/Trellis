@@ -96,9 +96,8 @@ export default function HomeScreen() {
                   key={item.id}
                   style={styles.recentCard}
                   onPress={() =>
-                    navigation.navigate('OcrLiveText', {
-                      pageUris: [item.imageUri],
-                      worksheetId: item.id,
+                    navigation.navigate('Process', {
+                      imageUri: item.imageUri,
                     })
                   }
                 >

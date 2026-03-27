@@ -25,10 +25,12 @@ import type { SimplifyLevel } from '@trellis/shared';
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Process'>;
 type Route = RouteProp<RootStackParamList, 'Process'>;
 
-const SIMPLIFY_OPTIONS: { label: string; value: SimplifyLevel }[] = [
+const SIMPLIFY_STEPS: { label: string; value: SimplifyLevel }[] = [
   { label: 'Off', value: null },
-  { label: 'Grade 1', value: 'G1' },
-  { label: 'Grade 2', value: 'G2' },
+  { label: 'G4', value: 'G4' },
+  { label: 'G3', value: 'G3' },
+  { label: 'G2', value: 'G2' },
+  { label: 'G1', value: 'G1' },
 ];
 
 const LOADING_STEPS = [
@@ -129,14 +131,15 @@ export default function ProcessScreen() {
         imageBase64 = `data:image/jpeg;base64,${base64}`;
       }
 
-      // 4. Call detect API
+      // Call detect API
       const result = await detectWorksheet({ imageBase64 });
 
-      if (!result.ok) {
+      if (result.ok === false) {
+        const msg = result.error.message;
         if (Platform.OS === 'web') {
-          window.alert('Detection Failed\n' + result.error.message);
+          window.alert('Detection Failed\n' + msg);
         } else {
-          Alert.alert('Detection Failed', result.error.message, [{ text: 'OK' }]);
+          Alert.alert('Detection Failed', msg, [{ text: 'OK' }]);
         }
         return;
       }
@@ -147,7 +150,7 @@ export default function ProcessScreen() {
         await updateRecentTitle(wid, label || 'Worksheet');
       }
 
-      // 5. Navigate to WorksheetView with detected blocks
+      // Navigate to WorksheetView with detected blocks
       navigation.replace('WorksheetView', {
         blocks: result.data.blocks,
         imageUri: resolvedUri,
@@ -205,37 +208,60 @@ export default function ProcessScreen() {
             />
           </View>
 
-          {/* Simplify Level */}
+          {/* Simplify Level — discrete slider */}
           <View style={styles.toggleRow}>
             <View style={styles.toggleInfo}>
               <Ionicons name="text-outline" size={22} color={colors.primary} />
-              <View>
+              <View style={{ flex: 1 }}>
                 <Text style={styles.toggleLabel}>Simplification Level</Text>
                 <Text style={styles.toggleDesc}>Rewrite at a lower reading level</Text>
               </View>
             </View>
           </View>
-          <View style={styles.chipRow}>
-            {SIMPLIFY_OPTIONS.map((opt) => (
-              <Pressable
-                key={opt.label}
+          <View style={styles.sliderContainer}>
+            {/* Track */}
+            <View style={styles.sliderTrack}>
+              <View
                 style={[
-                  styles.chip,
-                  simplifyLevel === opt.value && styles.chipActive,
+                  styles.sliderFill,
+                  {
+                    width: `${(SIMPLIFY_STEPS.findIndex((s) => s.value === simplifyLevel) / (SIMPLIFY_STEPS.length - 1)) * 100}%`,
+                  },
                 ]}
-                onPress={() => setSimplifyLevel(opt.value)}
-                disabled={isProcessing || !persistReady}
-              >
-                <Text
-                  style={[
-                    styles.chipText,
-                    simplifyLevel === opt.value && styles.chipTextActive,
-                  ]}
-                >
-                  {opt.label}
-                </Text>
-              </Pressable>
-            ))}
+              />
+            </View>
+            {/* Stop dots + labels */}
+            <View style={styles.sliderStops}>
+              {SIMPLIFY_STEPS.map((step, i) => {
+                const isActive = simplifyLevel === step.value;
+                const currentIdx = SIMPLIFY_STEPS.findIndex((s) => s.value === simplifyLevel);
+                const isFilled = i <= currentIdx;
+                return (
+                  <Pressable
+                    key={step.label}
+                    style={styles.sliderStopHit}
+                    onPress={() => setSimplifyLevel(step.value)}
+                    disabled={isProcessing || !persistReady}
+                  >
+                    <View
+                      style={[
+                        styles.sliderDot,
+                        isFilled && styles.sliderDotFilled,
+                        isActive && styles.sliderDotActive,
+                      ]}
+                    />
+                    <Text
+                      style={[
+                        styles.sliderLabel,
+                        isActive && styles.sliderLabelActive,
+                      ]}
+                    >
+                      {step.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </View>
 
           {/* Summarize */}
@@ -331,28 +357,58 @@ const styles = StyleSheet.create({
   toggleLabel: { ...typography.cardTitle, color: colors.textPrimary },
   toggleDesc: { ...typography.caption, color: colors.textSecondary },
 
-  // Chips
-  chipRow: {
-    flexDirection: 'row',
-    gap: spacing.innerGapSmall,
-    paddingHorizontal: spacing.innerGap,
+  // Simplification slider
+  sliderContainer: {
+    paddingHorizontal: spacing.pagePadding,
     marginBottom: spacing.innerGapSmall,
   },
-  chip: {
-    paddingHorizontal: spacing.innerGap,
-    paddingVertical: spacing.innerGapSmall,
-    borderRadius: radii.chip,
+  sliderTrack: {
+    height: 4,
     backgroundColor: colors.surfaceMuted,
+    borderRadius: radii.circle,
+    marginHorizontal: 20, // half of sliderStopHit width to align with dot centres
   },
-  chipActive: {
+  sliderFill: {
+    height: 4,
+    backgroundColor: colors.primary,
+    borderRadius: radii.circle,
+  },
+  sliderStops: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: -12, // overlap dots onto track
+  },
+  sliderStopHit: {
+    width: 40,
+    alignItems: 'center',
+    paddingTop: 2,
+  },
+  sliderDot: {
+    width: 16,
+    height: 16,
+    borderRadius: radii.circle,
+    backgroundColor: colors.surfaceMuted,
+    borderWidth: 2,
+    borderColor: colors.surface,
+  },
+  sliderDotFilled: {
     backgroundColor: colors.primary,
   },
-  chipText: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
+  sliderDotActive: {
+    width: 20,
+    height: 20,
+    backgroundColor: colors.primary,
+    borderWidth: 3,
+    borderColor: colors.surface,
   },
-  chipTextActive: {
-    color: colors.surface,
+  sliderLabel: {
+    ...typography.caption,
+    color: colors.textSecondary,
+    marginTop: 4,
+  },
+  sliderLabelActive: {
+    color: colors.primary,
+    fontWeight: '700' as const,
   },
 
   // Process button

@@ -14,7 +14,6 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
-import WorksheetCropEditor from '../components/WorksheetCropEditor';
 import { colors, typography, spacing, radii, shadows } from '../theme';
 import { RootStackParamList } from '../navigation/types';
 
@@ -25,10 +24,8 @@ type Nav = NativeStackNavigationProp<RootStackParamList, 'WorksheetCapture'>;
 export default function WorksheetCaptureScreen() {
   const navigation = useNavigation<Nav>();
   const [pages, setPages] = useState<string[]>([]);
-  const [cropQueue, setCropQueue] = useState<string[]>([]);
-  const activeCrop = cropQueue[0];
 
-  const remainingSlots = MAX_PAGES - pages.length - cropQueue.length;
+  const remainingSlots = MAX_PAGES - pages.length;
 
   const addFromCamera = async () => {
     if (Platform.OS === 'web') {
@@ -57,21 +54,14 @@ export default function WorksheetCaptureScreen() {
       Alert.alert('Page limit', `You can add up to ${MAX_PAGES} pages.`);
       return;
     }
-    const result =
-      Platform.OS === 'web'
-        ? await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ['images'],
-            quality: 0.9,
-          })
-        : await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ['images'],
-            allowsMultipleSelection: true,
-            selectionLimit: Math.min(remainingSlots, 15),
-            quality: 0.9,
-          });
-    if (result.canceled || !result.assets?.length) return;
-    const uris = result.assets.map((a) => a.uri);
-    setCropQueue((q) => [...q, ...uris]);
+    // Use system crop UI (allowsEditing) — picks one image at a time
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.9,
+      allowsEditing: true,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    setPages((p) => [...p, result.assets[0].uri]);
   };
 
   const removePage = (index: number) => {
@@ -79,27 +69,8 @@ export default function WorksheetCaptureScreen() {
   };
 
   const handleContinue = () => {
-    if (cropQueue.length > 0) {
-      Alert.alert('Finish cropping', 'Apply or skip crop for the remaining photos first.');
-      return;
-    }
     if (pages.length === 0) return;
-    navigation.navigate('OcrLiveText', { pageUris: [...pages] });
-  };
-
-  const onCropConfirm = (croppedUri: string) => {
-    setPages((p) => [...p, croppedUri]);
-    setCropQueue((q) => q.slice(1));
-  };
-
-  const onCropSkip = () => {
-    if (!activeCrop) return;
-    setPages((p) => [...p, activeCrop]);
-    setCropQueue((q) => q.slice(1));
-  };
-
-  const onCropCancel = () => {
-    setCropQueue([]);
+    navigation.navigate('Process', { imageUri: pages[0] });
   };
 
   return (
@@ -113,8 +84,8 @@ export default function WorksheetCaptureScreen() {
       </View>
 
       <Text style={styles.lead}>
-        Add one or more pages. Photos from the camera can be cropped in the system editor. Photos from your
-        library open in the crop tool next. Then we scan text (Live Text style) so you can select phrases.
+        Add one or more pages. Both camera and library photos use the system crop editor.
+        Then we scan text (Live Text style) so you can select phrases.
       </Text>
 
       <View style={styles.actions}>
@@ -137,14 +108,8 @@ export default function WorksheetCaptureScreen() {
       </View>
 
       <Text style={styles.sectionLabel}>
-        Pages ({pages.length + cropQueue.length}/{MAX_PAGES})
+        Pages ({pages.length}/{MAX_PAGES})
       </Text>
-
-      {cropQueue.length > 0 ? (
-        <Text style={styles.queueBanner}>
-          {cropQueue.length} photo(s) from your library — crop or use full image for each.
-        </Text>
-      ) : null}
 
       <FlatList
         data={pages}
@@ -169,23 +134,13 @@ export default function WorksheetCaptureScreen() {
       />
 
       <Pressable
-        style={[styles.continueBtn, (pages.length === 0 || cropQueue.length > 0) && styles.continueBtnDisabled]}
+        style={[styles.continueBtn, pages.length === 0 && styles.continueBtnDisabled]}
         onPress={handleContinue}
-        disabled={pages.length === 0 || cropQueue.length > 0}
+        disabled={pages.length === 0}
       >
-        <Text style={styles.continueBtnText}>Scan pages (Live Text)</Text>
+        <Text style={styles.continueBtnText}>Continue</Text>
         <Ionicons name="arrow-forward" size={20} color={colors.surface} />
       </Pressable>
-
-      {activeCrop ? (
-        <WorksheetCropEditor
-          uri={activeCrop}
-          onConfirm={onCropConfirm}
-          onSkipFullImage={onCropSkip}
-          onCancel={onCropCancel}
-        />
-      ) : null}
-
     </SafeAreaView>
   );
 }
@@ -237,15 +192,6 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     paddingHorizontal: spacing.pagePadding,
     marginBottom: spacing.innerGapSmall,
-  },
-  queueBanner: {
-    ...typography.caption,
-    color: colors.warningText,
-    backgroundColor: colors.warning,
-    marginHorizontal: spacing.pagePadding,
-    marginBottom: spacing.innerGapSmall,
-    padding: spacing.innerGapSmall,
-    borderRadius: radii.chip,
   },
   listContent: {
     paddingHorizontal: spacing.pagePadding,

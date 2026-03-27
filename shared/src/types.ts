@@ -31,7 +31,7 @@ export interface Toggles {
   summarize: boolean;
 }
 
-export type SimplifyLevel = 'G1' | 'G2' | null;
+export type SimplifyLevel = 'G1' | 'G2' | 'G3' | 'G4' | null;
 
 export interface ProcessOptions {
   summaryMaxSentences?: number; // default 5
@@ -54,7 +54,7 @@ export type SnippetMode = 'simplify' | 'visual' | 'summary';
 
 export interface RegenerateContext {
   originalText: string;
-  simplifyLevel?: 'G1' | 'G2';
+  simplifyLevel?: 'G1' | 'G2' | 'G3' | 'G4';
   summaryMaxSentences?: number;
   language?: string;
   /** Required when target.type === 'snippet'. */
@@ -86,7 +86,7 @@ export interface ProcessResponse {
 }
 
 export interface ProcessMeta {
-  simplifyLevel: 'G1' | 'G2' | null;
+  simplifyLevel: 'G1' | 'G2' | 'G3' | 'G4' | null;
   toggles: Toggles;
   latencyMs: { total: number };
 }

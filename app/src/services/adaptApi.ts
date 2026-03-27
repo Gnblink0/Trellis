@@ -8,8 +8,33 @@ import type {
   ApiError,
   OcrScanResponse,
 } from '@trellis/shared';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3001';
+/**
+ * Auto-detect the API server URL.
+ * - Env var override always wins.
+ * - On native (Expo Go / dev client), extract the dev machine's LAN IP
+ *   from Expo's hostUri so iPad/phone can reach the server without manual config.
+ * - On web, localhost works fine.
+ */
+function resolveApiUrl(): string {
+  const envUrl = process.env.EXPO_PUBLIC_API_URL;
+  if (envUrl) return envUrl;
+
+  if (Platform.OS !== 'web') {
+    // hostUri format: "192.168.1.5:8081" (LAN IP : metro port)
+    const hostUri = Constants.expoConfig?.hostUri ?? Constants.manifest2?.extra?.expoGo?.debuggerHost;
+    if (hostUri) {
+      const host = hostUri.split(':')[0]; // strip metro port
+      return `http://${host}:3001`;
+    }
+  }
+
+  return 'http://localhost:3001';
+}
+
+const API_URL = resolveApiUrl();
 const TIMEOUT_MS = 120_000;
 
 type ApiResult<T> =

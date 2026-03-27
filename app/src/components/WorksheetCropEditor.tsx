@@ -126,6 +126,9 @@ export default function WorksheetCropEditor({
     return computeContainRect(container.w, container.h, natural.w, natural.h);
   }, [natural, container.w, container.h]);
 
+  const fittedRef = useRef(fitted);
+  fittedRef.current = fitted;
+
   useEffect(() => {
     if (!fitted || !natural) return;
     setCrop((prev) => {
@@ -145,83 +148,72 @@ export default function WorksheetCropEditor({
     setContainer({ w: width, h: height });
   }, []);
 
-  const clampCrop = useCallback(
+  /** Clamp a crop rect inside the fitted image area (uses ref so PanResponder never goes stale). */
+  const clampCropLatest = useCallback(
     (c: { left: number; top: number; width: number; height: number }) => {
-      if (!fitted) return c;
-      const width = Math.max(
-        MIN_CROP,
-        Math.min(c.width, fitted.width)
-      );
-      const height = Math.max(
-        MIN_CROP,
-        Math.min(c.height, fitted.height)
-      );
-      const left = Math.max(
-        fitted.x,
-        Math.min(c.left, fitted.x + fitted.width - width)
-      );
-      const top = Math.max(
-        fitted.y,
-        Math.min(c.top, fitted.y + fitted.height - height)
-      );
+      const f = fittedRef.current;
+      if (!f) return c;
+      const width = Math.max(MIN_CROP, Math.min(c.width, f.width));
+      const height = Math.max(MIN_CROP, Math.min(c.height, f.height));
+      const left = Math.max(f.x, Math.min(c.left, f.x + f.width - width));
+      const top = Math.max(f.y, Math.min(c.top, f.y + f.height - height));
       return { left, top, width, height };
     },
-    [fitted]
+    [] // no deps — reads from fittedRef
   );
 
-  const movePan = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onPanResponderGrant: () => {
-          const cur = cropRef.current;
-          if (cur) {
-            moveStart.current = { l: cur.left, t: cur.top, w: cur.width, h: cur.height };
-          }
-        },
-        onPanResponderMove: (_, g) => {
-          const s = moveStart.current;
-          if (!fitted) return;
-          setCrop(
-            clampCrop({
-              left: s.l + g.dx,
-              top: s.t + g.dy,
-              width: s.w,
-              height: s.h,
-            })
-          );
-        },
-      }),
-    [clampCrop, fitted]
-  );
+  // Stable PanResponder (created once, reads mutable refs — never recreated mid-gesture)
+  const movePan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: () => {
+        const cur = cropRef.current;
+        if (cur) {
+          moveStart.current = { l: cur.left, t: cur.top, w: cur.width, h: cur.height };
+        }
+      },
+      onPanResponderMove: (_, g) => {
+        const s = moveStart.current;
+        if (!fittedRef.current) return;
+        setCrop(
+          clampCropLatest({
+            left: s.l + g.dx,
+            top: s.t + g.dy,
+            width: s.w,
+            height: s.h,
+          })
+        );
+      },
+    })
+  ).current;
 
-  const resizePan = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onPanResponderGrant: () => {
-          const cur = cropRef.current;
-          if (cur) {
-            resizeStart.current = { w: cur.width, h: cur.height };
-          }
-        },
-        onPanResponderMove: (_, g) => {
-          const cur = cropRef.current;
-          if (!cur || !fitted) return;
-          const s = resizeStart.current;
-          setCrop(
-            clampCrop({
-              ...cur,
-              width: s.w + g.dx,
-              height: s.h + g.dy,
-            })
-          );
-        },
-      }),
-    [clampCrop, fitted]
-  );
+  const resizePan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderTerminationRequest: () => false,
+      onPanResponderGrant: () => {
+        const cur = cropRef.current;
+        if (cur) {
+          resizeStart.current = { w: cur.width, h: cur.height };
+        }
+      },
+      onPanResponderMove: (_, g) => {
+        const cur = cropRef.current;
+        if (!cur || !fittedRef.current) return;
+        const s = resizeStart.current;
+        setCrop(
+          clampCropLatest({
+            ...cur,
+            width: s.w + g.dx,
+            height: s.h + g.dy,
+          })
+        );
+      },
+    })
+  ).current;
 
   const applyCrop = useCallback(async () => {
     if (!natural || !fitted || !crop) return;
@@ -362,11 +354,11 @@ const styles = StyleSheet.create({
     position: 'absolute',
     borderWidth: 2,
     borderColor: colors.primary,
-    backgroundColor: 'transparent',
+    // Near-invisible background so iPad registers touches on the crop area
+    backgroundColor: 'rgba(0,0,0,0.001)',
   },
   cropInner: {
     flex: 1,
-    backgroundColor: 'transparent',
   },
   handleBR: {
     position: 'absolute',

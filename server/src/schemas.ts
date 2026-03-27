@@ -4,7 +4,7 @@ import { z } from "zod/v4";
 
 export const togglesSchema = z.object({
   visualSupport: z.boolean(),
-  simplifyLevel: z.union([z.literal("G1"), z.literal("G2"), z.null()]),
+  simplifyLevel: z.union([z.literal("G1"), z.literal("G2"), z.literal("G3"), z.literal("G4"), z.null()]),
   summarize: z.boolean(),
 });
 
@@ -51,7 +51,7 @@ export const regenerateRequestSchema = z
     ]),
     context: z.object({
       originalText: z.string().min(1, "originalText is required"),
-      simplifyLevel: z.union([z.literal("G1"), z.literal("G2")]).optional(),
+      simplifyLevel: z.union([z.literal("G1"), z.literal("G2"), z.literal("G3"), z.literal("G4")]).optional(),
       summaryMaxSentences: z.number().int().min(1).max(10).optional(),
       language: z.string().optional(),
       mode: snippetModeSchema.optional(),

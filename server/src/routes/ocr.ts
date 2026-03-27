@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import Tesseract from "tesseract.js";
+import * as vision from "@google-cloud/vision";
 import { z } from "zod/v4";
 import type { ApiError, OcrScanResponse, OcrWordBox } from "@trellis/shared";
 
@@ -16,76 +16,28 @@ function sendError(res: Response, status: number, error: ApiError) {
   return res.status(status).json(error);
 }
 
-/** Normalize Tesseract bbox to 0–1 relative to page dimensions. */
-type TessWord = {
-  text?: string;
-  confidence?: number;
-  bbox: { x0: number; y0: number; x1: number; y1: number };
-};
+// ── Google Cloud Vision client (shared with adapt router) ──
 
-function normalizeWord(
-  w: TessWord,
-  pageW: number,
-  pageH: number
-): OcrWordBox | null {
-  const t = w.text?.trim();
-  if (!t) return null;
-  const b = w.bbox;
-  const conf = w.confidence ?? 0;
-  if (conf < 35 && t.length > 1) return null;
-  return {
-    text: t,
-    confidence: conf,
-    bbox: {
-      left: b.x0 / pageW,
-      top: b.y0 / pageH,
-      width: (b.x1 - b.x0) / pageW,
-      height: (b.y1 - b.y0) / pageH,
-    },
-  };
-}
+let _visionClient: vision.ImageAnnotatorClient | null = null;
 
-function inferPageSize(words: TessWord[], data: { width?: number; height?: number }): {
-  width: number;
-  height: number;
-} {
-  if (data.width && data.height && data.width > 1 && data.height > 1) {
-    return { width: data.width, height: data.height };
-  }
-  let maxX = 1;
-  let maxY = 1;
-  for (const w of words) {
-    maxX = Math.max(maxX, w.bbox.x1);
-    maxY = Math.max(maxY, w.bbox.y1);
-  }
-  return { width: maxX, height: maxY };
-}
-
-function collectWords(data: {
-  words?: TessWord[] | null;
-  blocks?: Array<{
-    paragraphs?: Array<{
-      lines?: Array<{ words?: TessWord[] }>;
-    }>;
-  }>;
-}): TessWord[] {
-  if (data.words && data.words.length > 0) {
-    return data.words;
-  }
-  const out: TessWord[] = [];
-  for (const block of data.blocks ?? []) {
-    for (const para of block.paragraphs ?? []) {
-      for (const line of para.lines ?? []) {
-        for (const w of line.words ?? []) {
-          out.push(w);
-        }
-      }
+function getVisionClient(): vision.ImageAnnotatorClient {
+  if (!_visionClient) {
+    const apiKey = process.env.GOOGLE_CLOUD_API_KEY;
+    if (apiKey) {
+      _visionClient = new vision.ImageAnnotatorClient({ apiKey });
+    } else {
+      _visionClient = new vision.ImageAnnotatorClient();
     }
   }
-  return out;
+  return _visionClient;
 }
 
-/** POST /api/ocr/scan — Live Text–style word boxes (normalized bbox). */
+interface Vertex {
+  x?: number | null;
+  y?: number | null;
+}
+
+/** POST /api/ocr/scan — Live Text–style word boxes (normalized bbox) via Google Cloud Vision. */
 ocrRouter.post("/scan", async (req: Request, res: Response) => {
   const parsed = ocrScanSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -97,30 +49,59 @@ ocrRouter.post("/scan", async (req: Request, res: Response) => {
 
   const { imageBase64 } = parsed.data;
   const rawBase64 = imageBase64.replace(/^data:image\/[a-zA-Z+]+;base64,/, "");
-  const buffer = Buffer.from(rawBase64, "base64");
 
-  let worker: Awaited<ReturnType<typeof Tesseract.createWorker>> | null = null;
   try {
-    worker = await Tesseract.createWorker("eng");
-    await worker.setParameters({
-      tessedit_pageseg_mode: Tesseract.PSM.AUTO,
+    const client = getVisionClient();
+    const [result] = await client.documentTextDetection({
+      image: { content: rawBase64 },
     });
 
-    const ret = await worker.recognize(buffer);
-    const data = ret.data as typeof ret.data & {
-      width?: number;
-      height?: number;
-      words?: TessWord[];
-      blocks?: unknown[];
-    };
+    const annotation = result.fullTextAnnotation;
+    if (!annotation || !annotation.pages?.length) {
+      const response: OcrScanResponse = { imageWidth: 1, imageHeight: 1, words: [] };
+      return res.json(response);
+    }
 
-    const rawWords = collectWords(data);
-    const { width: pageW, height: pageH } = inferPageSize(rawWords, data);
+    const page = annotation.pages[0];
+    const pageW = page.width ?? 1;
+    const pageH = page.height ?? 1;
 
     const words: OcrWordBox[] = [];
-    for (const w of rawWords) {
-      const box = normalizeWord(w, pageW, pageH);
-      if (box) words.push(box);
+
+    for (const block of page.blocks ?? []) {
+      for (const paragraph of block.paragraphs ?? []) {
+        for (const word of paragraph.words ?? []) {
+          // Build word text from symbols
+          const text = (word.symbols ?? []).map((s) => s.text ?? "").join("");
+          if (!text.trim()) continue;
+
+          const confidence = word.confidence ?? 0;
+          if (confidence < 0.35 && text.length > 1) continue;
+
+          // Compute bounding rect from vertices
+          const vertices: Vertex[] =
+            (word.boundingBox?.vertices as Vertex[]) ?? [];
+          if (vertices.length < 4) continue;
+
+          const xs = vertices.map((v) => v.x ?? 0);
+          const ys = vertices.map((v) => v.y ?? 0);
+          const minX = Math.min(...xs);
+          const minY = Math.min(...ys);
+          const maxX = Math.max(...xs);
+          const maxY = Math.max(...ys);
+
+          words.push({
+            text: text.trim(),
+            confidence: Math.round(confidence * 100),
+            bbox: {
+              left: minX / pageW,
+              top: minY / pageH,
+              width: (maxX - minX) / pageW,
+              height: (maxY - minY) / pageH,
+            },
+          });
+        }
+      }
     }
 
     const response: OcrScanResponse = {
@@ -129,16 +110,13 @@ ocrRouter.post("/scan", async (req: Request, res: Response) => {
       words,
     };
 
+    console.log(`[ocr/scan] Google Vision: ${words.length} words detected (${pageW}x${pageH})`);
     return res.json(response);
   } catch (err) {
-    console.error("[ocr/scan]", err);
+    console.error("[ocr/scan] Google Vision error:", err);
     return sendError(res, 500, {
       code: "INTERNAL_ERROR",
       message: err instanceof Error ? err.message : "OCR failed.",
     });
-  } finally {
-    if (worker) {
-      await worker.terminate().catch(() => {});
-    }
   }
 });

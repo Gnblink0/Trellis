@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, typography, spacing, radii, shadows } from '../theme';
-import { DrawingTool } from './DrawingCanvas';
+import type { DrawingTool } from './DrawingCanvas';
 
 type Props = {
   tool: DrawingTool;

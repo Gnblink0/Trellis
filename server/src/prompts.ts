@@ -22,6 +22,8 @@ IMPORTANT RULES:
 const SIMPLIFY_INSTRUCTIONS: Record<string, string> = {
   G1: "Rewrite at a Grade 1 reading level. Use only common single-syllable words where possible. Keep sentences to 5-7 words. Use simple subject-verb-object structure.",
   G2: "Rewrite at a Grade 2 reading level. Use common words with up to 2 syllables. Keep sentences to 8-12 words. Simple compound sentences allowed.",
+  G3: "Rewrite at a Grade 3 reading level. Use familiar words with up to 3 syllables. Keep sentences to 10-15 words. Simple compound and complex sentences allowed. Explain unfamiliar terms in context.",
+  G4: "Rewrite at a Grade 4 reading level. Use grade-appropriate vocabulary. Keep sentences to 12-18 words. Moderate sentence complexity with some domain-specific terms explained briefly in context.",
 };
 
 // ── Build user message from toggles ──
