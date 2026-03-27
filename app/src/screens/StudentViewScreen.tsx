@@ -23,21 +23,19 @@ import DrawingToolbar from '../components/DrawingToolbar';
 import FloatingMarker, { MarkerData } from '../components/FloatingMarker';
 import { consumeStudentViewData } from '../services/studentViewStore';
 
-// Native-only imports (ViewShot, MediaLibrary, Sharing)
-let ViewShot: any = View; // fallback to View on web/Expo Go
-let MediaLibrary: any = null;
+// Native-only imports (captureRef, Sharing)
+let captureRef: any = null;
 let Sharing: any = null;
 if (Platform.OS !== 'web') {
   try {
-    ViewShot = require('react-native-view-shot').default;
+    captureRef = require('react-native-view-shot').captureRef;
   } catch {
-    // react-native-view-shot unavailable (Expo Go) — export disabled
+    // react-native-view-shot unavailable — export disabled
   }
   try {
-    MediaLibrary = require('expo-media-library');
     Sharing = require('expo-sharing');
   } catch {
-    // expo-media-library / expo-sharing unavailable
+    // expo-sharing unavailable
   }
 }
 
@@ -114,9 +112,11 @@ export default function StudentViewScreen() {
   const [drawingHistory, setDrawingHistory] = useState<DrawingData[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
   const [isExporting, setIsExporting] = useState(false);
-  const [exportMode, setExportMode] = useState(false); // render all pages for capture
+  const [hideMarkersForExport, setHideMarkersForExport] = useState(false);
 
-  const viewShotRef = useRef<any>(null);
+  const [drawingActive, setDrawingActive] = useState(false);
+
+  const captureViewRef = useRef<View>(null);
   const currentPage = PAGES[pageIndex];
 
   const goToPage = (idx: number) => {
@@ -217,31 +217,14 @@ export default function StudentViewScreen() {
     setHistoryIndex(newHistory.length - 1);
   };
 
-  const handleExport = () => {
+  const handleExport = async () => {
+    if (isExporting) return;
     setIsExporting(true);
-    setExportMode(true); // render all pages, then capture in effect
-  };
-
-  // Capture after all pages render in export mode
-  const handleExportCapture = async () => {
-    if (!exportMode || !isExporting) return;
-
-    // Small delay to let all images render
-    await new Promise((r) => setTimeout(r, 500));
 
     try {
       if (Platform.OS === 'web') {
         const { toPng } = await import('html-to-image');
-        let domNode: HTMLElement | null = null;
-        const ref = viewShotRef.current;
-        if (ref instanceof HTMLElement) {
-          domNode = ref;
-        } else if (ref?.getNode) {
-          domNode = ref.getNode();
-        }
-        if (!domNode) {
-          domNode = document.querySelector('[data-testid="worksheet-capture"]') as HTMLElement;
-        }
+        const domNode = document.querySelector('[data-testid="worksheet-capture"]') as HTMLElement;
         if (domNode) {
           const dataUrl = await toPng(domNode, { quality: 1.0, pixelRatio: 2 });
           const link = document.createElement('a');
@@ -249,35 +232,28 @@ export default function StudentViewScreen() {
           link.href = dataUrl;
           link.click();
         }
+      } else if (captureRef && captureViewRef.current) {
+        // Hide markers before capture, wait a frame for re-render
+        setHideMarkersForExport(true);
+        await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const uri = await captureRef(captureViewRef, { format: 'png', quality: 1.0 });
+        setHideMarkersForExport(false);
+        if (Sharing && await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(uri, {
+            mimeType: 'image/png',
+            dialogTitle: 'Export Worksheet',
+          });
+        } else {
+          Alert.alert('Export unavailable', 'Sharing is not available on this device.');
+        }
       } else {
-        // Native: capture with ViewShot and save to Photos
-        const { status } = await MediaLibrary.requestPermissionsAsync();
-        if (status !== 'granted') {
-          Alert.alert('Permission needed', 'Please grant permission to save images to your library.');
-          return;
-        }
-        if (viewShotRef.current?.capture) {
-          const uri = await viewShotRef.current.capture();
-          const asset = await MediaLibrary.createAssetAsync(uri);
-          await MediaLibrary.createAlbumAsync('Trellis', asset, false);
-          Alert.alert('Success!', 'Worksheet exported to your Photos library.', [
-            {
-              text: 'Share',
-              onPress: async () => {
-                if (await Sharing.isAvailableAsync()) {
-                  await Sharing.shareAsync(uri);
-                }
-              },
-            },
-            { text: 'OK' },
-          ]);
-        }
+        Alert.alert('Export unavailable', 'Export libraries not available in this environment.');
       }
     } catch (error) {
       console.error('Export failed:', error);
       Alert.alert('Export failed', 'Could not export the worksheet. Please try again.');
     } finally {
-      setExportMode(false);
+      setHideMarkersForExport(false);
       setIsExporting(false);
     }
   };
@@ -348,113 +324,87 @@ export default function StudentViewScreen() {
             style={styles.worksheetScroll}
             contentContainerStyle={styles.worksheetScrollContent}
             showsVerticalScrollIndicator={false}
+            scrollEnabled={!drawingActive}
           >
-            <ViewShot
-              ref={viewShotRef}
-              options={{ format: 'png', quality: 1.0 }}
+            <View
+              ref={captureViewRef}
+              collapsable={false}
               testID="worksheet-capture"
-              onLayout={exportMode ? () => handleExportCapture() : undefined}
+              style={styles.imageWrapper}
+              onLayout={handleImageLayout}
             >
-              {exportMode ? (
-                /* Export mode: render page(s) for capture */
-                imageUri ? (
-                  <View style={styles.imageWrapper}>
-                    <Image
-                      source={{ uri: imageUri }}
-                      style={[
-                        styles.worksheetImage,
-                        imageSize.height > 0 && { height: imageSize.height },
-                      ]}
-                      resizeMode="contain"
-                    />
-                  </View>
-                ) : (
-                PAGES.map((page, pi) => (
-                  <View key={pi} style={styles.imageWrapper}>
-                    <Image
-                      source={page.image}
-                      style={[
-                        styles.worksheetImage,
-                        imageSize.height > 0 && { height: imageSize.height },
-                      ]}
-                      resizeMode="contain"
-                    />
-                  </View>
-                ))
-                )
-              ) : (
-                /* Normal mode: single page with interactivity */
-                <View style={styles.imageWrapper} onLayout={handleImageLayout}>
-                  <Image
-                    source={imageUri ? { uri: imageUri } : currentPage.image}
-                    style={[
-                      styles.worksheetImage,
-                      imageSize.height > 0 && { height: imageSize.height },
-                    ]}
-                    resizeMode="contain"
+              <Image
+                source={imageUri ? { uri: imageUri } : currentPage.image}
+                style={[
+                  styles.worksheetImage,
+                  imageSize.height > 0 && { height: imageSize.height },
+                ]}
+                resizeMode="contain"
+              />
+
+              {/* Floating markers for adaptations (hidden during export) */}
+              {imageSize.width > 0 && !hideMarkersForExport &&
+                markers.map((marker) => (
+                  <FloatingMarker
+                    key={marker.id}
+                    marker={marker}
+                    worksheetWidth={imageSize.width}
+                    worksheetHeight={imageSize.height}
                   />
+                ))}
 
-                  {/* Floating markers for adaptations */}
-                  {imageSize.width > 0 &&
-                    markers.map((marker) => (
-                      <FloatingMarker
-                        key={marker.id}
-                        marker={marker}
-                        worksheetWidth={imageSize.width}
-                        worksheetHeight={imageSize.height}
-                      />
-                    ))}
+              {/* Input zones — only for legacy mock worksheets */}
+              {!imageUri && imageSize.width > 0 &&
+                currentPage.inputZones?.map((zone) => (
+                  <TextInput
+                    key={zone.id}
+                    style={[
+                      styles.inputOverlay,
+                      {
+                        top: `${zone.rect.top}%`,
+                        left: `${zone.rect.left}%`,
+                        width: `${zone.rect.width}%`,
+                        height: `${zone.rect.height}%`,
+                      },
+                    ]}
+                    placeholder={zone.placeholder}
+                    placeholderTextColor={colors.textSecondary}
+                    value={answers[zone.id] ?? ''}
+                    onChangeText={(text) =>
+                      setAnswers((prev) => ({ ...prev, [zone.id]: text }))
+                    }
+                    multiline={zone.multiline}
+                  />
+                ))}
 
-                  {/* Input zones — only for legacy mock worksheets */}
-                  {!imageUri && imageSize.width > 0 &&
-                    currentPage.inputZones?.map((zone) => (
-                      <TextInput
-                        key={zone.id}
-                        style={[
-                          styles.inputOverlay,
-                          {
-                            top: `${zone.rect.top}%`,
-                            left: `${zone.rect.left}%`,
-                            width: `${zone.rect.width}%`,
-                            height: `${zone.rect.height}%`,
-                          },
-                        ]}
-                        placeholder={zone.placeholder}
-                        placeholderTextColor={colors.textSecondary}
-                        value={answers[zone.id] ?? ''}
-                        onChangeText={(text) =>
-                          setAnswers((prev) => ({ ...prev, [zone.id]: text }))
-                        }
-                        multiline={zone.multiline}
-                      />
-                    ))}
-
-                  {/* Drawing canvas overlay */}
-                  {imageSize.width > 0 && (
-                    <DrawingCanvas
-                      width={imageSize.width}
-                      height={imageSize.height}
-                      tool={drawingTool}
-                      color={drawingColor}
-                      strokeWidth={strokeWidth}
-                      onDrawingChange={handleDrawingChange}
-                      initialData={drawingData}
-                    />
-                  )}
-                </View>
+              {/* Drawing canvas overlay */}
+              {imageSize.width > 0 && (
+                <DrawingCanvas
+                  width={imageSize.width}
+                  height={imageSize.height}
+                  tool={drawingTool}
+                  color={drawingColor}
+                  strokeWidth={strokeWidth}
+                  enabled={drawingActive}
+                  onDrawingChange={handleDrawingChange}
+                  initialData={drawingData}
+                />
               )}
-            </ViewShot>
+            </View>
           </ScrollView>
         </View>
       </View>
 
-      {/* Drawing toolbar */}
+      {/* Drawing toolbar — left side */}
       <View style={styles.drawingToolbarContainer}>
         <DrawingToolbar
           tool={drawingTool}
           color={drawingColor}
           strokeWidth={strokeWidth}
-          onToolChange={setDrawingTool}
+          onToolChange={(t) => {
+            setDrawingTool(t);
+            setDrawingActive(true); // auto-enable drawing when tool is selected
+          }}
           onColorChange={setDrawingColor}
           onStrokeWidthChange={setStrokeWidth}
           onUndo={handleUndo}
@@ -465,14 +415,34 @@ export default function StudentViewScreen() {
         />
       </View>
 
-      {/* Export button */}
-      <Pressable
-        style={styles.fab}
-        onPress={handleExport}
-      >
-        <Ionicons name={isExporting ? 'hourglass' : 'download-outline'} size={20} color={colors.surface} />
-        <Text style={styles.fabText}>{isExporting ? 'Exporting...' : 'Export Worksheet'}</Text>
-      </Pressable>
+      {/* Bottom-right floating controls */}
+      <View style={styles.bottomRightControls}>
+        {/* Draw/Scroll mode toggle */}
+        <Pressable
+          style={[styles.modeToggle, drawingActive && styles.modeToggleActive]}
+          onPress={() => setDrawingActive((v) => !v)}
+        >
+          <Ionicons
+            name={drawingActive ? 'create' : 'hand-left'}
+            size={20}
+            color={drawingActive ? colors.surface : colors.textSecondary}
+          />
+          <Text
+            style={[styles.modeToggleText, drawingActive && styles.modeToggleTextActive]}
+          >
+            {drawingActive ? 'Draw' : 'Scroll'}
+          </Text>
+        </Pressable>
+
+        {/* Export button */}
+        <Pressable
+          style={styles.fab}
+          onPress={handleExport}
+        >
+          <Ionicons name={isExporting ? 'hourglass' : 'download-outline'} size={20} color={colors.surface} />
+          <Text style={styles.fabText}>{isExporting ? 'Exporting...' : 'Export'}</Text>
+        </Pressable>
+      </View>
     </SafeAreaView>
   );
 }
@@ -568,11 +538,35 @@ const styles = StyleSheet.create({
     left: spacing.pagePadding,
   },
 
-  // FAB (unified with EA view)
-  fab: {
+  // Bottom-right floating controls (mode toggle + export)
+  bottomRightControls: {
     position: 'absolute',
     bottom: 40,
-    alignSelf: 'center',
+    right: spacing.pagePadding,
+    alignItems: 'flex-end',
+    gap: spacing.innerGapSmall,
+  },
+  modeToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.innerGapSmall,
+    backgroundColor: colors.surface,
+    borderRadius: radii.circle,
+    paddingHorizontal: spacing.innerGap,
+    paddingVertical: spacing.innerGapSmall,
+    ...shadows.floatingToolbar,
+  },
+  modeToggleActive: {
+    backgroundColor: colors.primary,
+  },
+  modeToggleText: {
+    ...typography.caption,
+    color: colors.textSecondary,
+  },
+  modeToggleTextActive: {
+    color: colors.surface,
+  },
+  fab: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.primary,
@@ -580,7 +574,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.pagePadding,
     paddingVertical: spacing.innerGapSmall,
     gap: spacing.innerGapSmall,
-    zIndex: 999,
     ...shadows.fab,
   },
   fabText: { ...typography.cardTitle, color: colors.surface },

@@ -3,12 +3,8 @@ import {
   StyleSheet,
   View,
   PanResponder,
-  Modal,
   TextInput,
-  Pressable,
   Text,
-  KeyboardAvoidingView,
-  Platform,
 } from 'react-native';
 import Svg, {
   Path as SvgPath,
@@ -16,10 +12,9 @@ import Svg, {
   Rect as SvgRect,
   Line as SvgLine,
   Polygon,
-  Text as SvgText,
   G,
 } from 'react-native-svg';
-import { colors, typography, spacing, radii, shadows } from '../theme';
+import { colors, spacing, radii } from '../theme';
 
 export type DrawingTool = 'pen' | 'highlighter' | 'eraser' | 'circle' | 'rect' | 'arrow' | 'text';
 
@@ -60,11 +55,14 @@ type Props = {
   color: string;
   strokeWidth: number;
   opacity?: number;
+  /** When false, touches pass through to ScrollView for scrolling. */
+  enabled?: boolean;
   onDrawingChange?: (data: DrawingData) => void;
   initialData?: DrawingData;
 };
 
-const MIN_POINT_DISTANCE_SQ = 9; // 3px squared — avoid sqrt per move event
+const MIN_POINT_DISTANCE_SQ = 9; // 3px squared
+const DRAG_THRESHOLD_SQ = 25; // 5px squared — distinguish tap from drag
 
 function pointsToSvgPath(points: { x: number; y: number }[]): string {
   if (points.length === 0) return '';
@@ -75,6 +73,72 @@ function pointsToSvgPath(points: { x: number; y: number }[]): string {
   return d;
 }
 
+// ---------------------------------------------------------------------------
+// Hit-testing helpers (eraser + text selection)
+// ---------------------------------------------------------------------------
+type Point = { x: number; y: number };
+
+function distSq(a: Point, b: Point): number {
+  return (a.x - b.x) ** 2 + (a.y - b.y) ** 2;
+}
+
+/** Squared distance from point p to the closest point on segment v→w. */
+function distToSegmentSq(p: Point, v: Point, w: Point): number {
+  const l2 = distSq(v, w);
+  if (l2 === 0) return distSq(p, v);
+  let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return distSq(p, { x: v.x + t * (w.x - v.x), y: v.y + t * (w.y - v.y) });
+}
+
+function isPathHit(touch: Point, path: DrawingPath, radiusSq: number): boolean {
+  const pts = path.path;
+  for (let i = 0; i < pts.length - 1; i++) {
+    if (distToSegmentSq(touch, pts[i], pts[i + 1]) <= radiusSq) return true;
+  }
+  if (pts.length >= 1 && distSq(touch, pts[0]) <= radiusSq) return true;
+  return false;
+}
+
+function isShapeHit(touch: Point, shape: DrawingShape, radiusSq: number): boolean {
+  if (shape.type === 'arrow') {
+    return distToSegmentSq(touch, shape.start, shape.end) <= radiusSq;
+  }
+  if (shape.type === 'rect') {
+    const x1 = Math.min(shape.start.x, shape.end.x);
+    const y1 = Math.min(shape.start.y, shape.end.y);
+    const x2 = Math.max(shape.start.x, shape.end.x);
+    const y2 = Math.max(shape.start.y, shape.end.y);
+    return (
+      distToSegmentSq(touch, { x: x1, y: y1 }, { x: x2, y: y1 }) <= radiusSq ||
+      distToSegmentSq(touch, { x: x2, y: y1 }, { x: x2, y: y2 }) <= radiusSq ||
+      distToSegmentSq(touch, { x: x2, y: y2 }, { x: x1, y: y2 }) <= radiusSq ||
+      distToSegmentSq(touch, { x: x1, y: y2 }, { x: x1, y: y1 }) <= radiusSq
+    );
+  }
+  if (shape.type === 'circle') {
+    const rx = Math.abs(shape.end.x - shape.start.x);
+    const ry = Math.abs(shape.end.y - shape.start.y);
+    const r = Math.sqrt(rx * rx + ry * ry);
+    const dist = Math.sqrt(distSq(touch, shape.start));
+    return (dist - r) ** 2 <= radiusSq;
+  }
+  return false;
+}
+
+/** Hit-test a text overlay (generous bounds for easy tapping). */
+function isTextHit(touch: Point, text: DrawingText): boolean {
+  const w = Math.max(text.text.length * text.fontSize * 0.55, 60);
+  const h = Math.max(text.fontSize * 1.6, 28);
+  return (
+    touch.x >= text.x - 8 && touch.x <= text.x + w + 8 &&
+    touch.y >= text.y - 8 && touch.y <= text.y + h + 8
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 export default function DrawingCanvas({
   width,
   height,
@@ -82,6 +146,7 @@ export default function DrawingCanvas({
   color,
   strokeWidth,
   opacity = 1,
+  enabled = true,
   onDrawingChange,
   initialData,
 }: Props) {
@@ -91,11 +156,11 @@ export default function DrawingCanvas({
   const [currentPath, setCurrentPath] = useState<{ x: number; y: number }[] | null>(null);
   const [currentShape, setCurrentShape] = useState<DrawingShape | null>(null);
 
-  // Text input modal state
-  const [textPrompt, setTextPrompt] = useState<{ x: number; y: number } | null>(null);
-  const [textInputValue, setTextInputValue] = useState('');
+  /** Index of the text currently being edited inline, or null. */
+  const [editingTextIndex, setEditingTextIndex] = useState<number | null>(null);
 
-  // Mutable refs so PanResponder always reads current tool/color/strokeWidth
+  // Mutable refs so PanResponder always reads current values
+  const enabledRef = useRef(enabled);
   const toolRef = useRef(tool);
   const colorRef = useRef(color);
   const strokeWidthRef = useRef(strokeWidth);
@@ -104,11 +169,15 @@ export default function DrawingCanvas({
   const shapesRef = useRef(shapes);
   const textsRef = useRef(texts);
   const onDrawingChangeRef = useRef(onDrawingChange);
+  const editingTextIndexRef = useRef(editingTextIndex);
 
-  // Mutable refs for in-progress drawing (avoid stale closures)
+  // In-progress drawing refs
   const currentPathRef = useRef<{ x: number; y: number }[] | null>(null);
   const currentShapeRef = useRef<DrawingShape | null>(null);
+  const draggingTextRef = useRef<{ index: number; startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const didDragRef = useRef(false);
 
+  useEffect(() => { enabledRef.current = enabled; }, [enabled]);
   useEffect(() => { toolRef.current = tool; }, [tool]);
   useEffect(() => { colorRef.current = color; }, [color]);
   useEffect(() => { strokeWidthRef.current = strokeWidth; }, [strokeWidth]);
@@ -117,58 +186,160 @@ export default function DrawingCanvas({
   useEffect(() => { shapesRef.current = shapes; }, [shapes]);
   useEffect(() => { textsRef.current = texts; }, [texts]);
   useEffect(() => { onDrawingChangeRef.current = onDrawingChange; }, [onDrawingChange]);
+  useEffect(() => { editingTextIndexRef.current = editingTextIndex; }, [editingTextIndex]);
 
-  const notifyChange = useCallback((newPaths: DrawingPath[], newShapes: DrawingShape[], newTexts: DrawingText[]) => {
-    onDrawingChangeRef.current?.({ paths: newPaths, shapes: newShapes, texts: newTexts });
-  }, []);
+  // -----------------------------------------------------------------------
+  // Eraser: remove any drawn element near the touch point
+  // -----------------------------------------------------------------------
+  const eraseAtPoint = useCallback((touch: Point) => {
+    const radius = Math.max(strokeWidthRef.current * 2, 15);
+    const radiusSq = radius * radius;
+    let changed = false;
 
-  // Text input handlers
-  const handleTextPromptOpen = useCallback((pos: { x: number; y: number }) => {
-    setTextPrompt(pos);
-    setTextInputValue('');
-  }, []);
-
-  const handleTextConfirm = useCallback(() => {
-    if (!textPrompt || !textInputValue.trim()) {
-      setTextPrompt(null);
-      return;
+    const newPaths = pathsRef.current.filter((p) => !isPathHit(touch, p, radiusSq));
+    if (newPaths.length !== pathsRef.current.length) {
+      pathsRef.current = newPaths;
+      setPaths(newPaths);
+      changed = true;
     }
-    const newText: DrawingText = {
-      text: textInputValue.trim(),
-      x: textPrompt.x,
-      y: textPrompt.y,
-      color: colorRef.current,
-      fontSize: strokeWidthRef.current * 3,
-    };
-    const newTexts = [...textsRef.current, newText];
-    setTexts(newTexts);
-    textsRef.current = newTexts;
-    notifyChange(pathsRef.current, shapesRef.current, newTexts);
-    setTextPrompt(null);
-  }, [textPrompt, textInputValue, notifyChange]);
 
+    const newShapes = shapesRef.current.filter((s) => !isShapeHit(touch, s, radiusSq));
+    if (newShapes.length !== shapesRef.current.length) {
+      shapesRef.current = newShapes;
+      setShapes(newShapes);
+      changed = true;
+    }
+
+    const newTexts = textsRef.current.filter((t) => !isTextHit(touch, t));
+    if (newTexts.length !== textsRef.current.length) {
+      textsRef.current = newTexts;
+      setTexts(newTexts);
+      changed = true;
+    }
+
+    if (changed) {
+      onDrawingChangeRef.current?.({ paths: pathsRef.current, shapes: shapesRef.current, texts: textsRef.current });
+    }
+  }, []);
+
+  const eraseAtPointRef = useRef(eraseAtPoint);
+  eraseAtPointRef.current = eraseAtPoint;
+
+  // -----------------------------------------------------------------------
+  // Text editing helpers
+  // -----------------------------------------------------------------------
+  const handleTextChange = useCallback((index: number, newText: string) => {
+    const updated = [...textsRef.current];
+    updated[index] = { ...updated[index], text: newText };
+    textsRef.current = updated;
+    setTexts(updated);
+  }, []);
+
+  /** Finalize text editing — remove empty texts, notify parent. */
+  const finalizeTextEdit = useCallback(() => {
+    const idx = editingTextIndexRef.current;
+    if (idx === null) return;
+
+    // Remove empty text boxes
+    if (!textsRef.current[idx]?.text?.trim()) {
+      const filtered = textsRef.current.filter((_, i) => i !== idx);
+      textsRef.current = filtered;
+      setTexts(filtered);
+    }
+
+    editingTextIndexRef.current = null;
+    setEditingTextIndex(null);
+    onDrawingChangeRef.current?.({ paths: pathsRef.current, shapes: shapesRef.current, texts: textsRef.current });
+  }, []);
+
+  const finalizeTextEditRef = useRef(finalizeTextEdit);
+  finalizeTextEditRef.current = finalizeTextEdit;
+
+  // -----------------------------------------------------------------------
+  // PanResponder
+  // -----------------------------------------------------------------------
   const panResponder = useRef(
     PanResponder.create({
-      // Capture phase: claim gesture BEFORE ScrollView can intercept
-      onStartShouldSetPanResponderCapture: () => true,
-      onMoveShouldSetPanResponderCapture: () => true,
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      // Refuse to let ScrollView steal the gesture once we have it
-      onPanResponderTerminationRequest: () => false,
-      onShouldBlockNativeResponder: () => true,
+      onStartShouldSetPanResponderCapture: (evt) => {
+        if (!enabledRef.current) return false;
+        // If editing a text, let touches ON the text box through to TextInput
+        if (editingTextIndexRef.current !== null) {
+          const { locationX, locationY } = evt.nativeEvent;
+          const txt = textsRef.current[editingTextIndexRef.current];
+          if (txt && isTextHit({ x: locationX, y: locationY }, txt)) {
+            return false; // Let TextInput handle this touch
+          }
+        }
+        return true;
+      },
+      onMoveShouldSetPanResponderCapture: (evt) => {
+        if (!enabledRef.current) return false;
+        if (editingTextIndexRef.current !== null) {
+          const { locationX, locationY } = evt.nativeEvent;
+          const txt = textsRef.current[editingTextIndexRef.current];
+          if (txt && isTextHit({ x: locationX, y: locationY }, txt)) {
+            return false;
+          }
+        }
+        return true;
+      },
+      onStartShouldSetPanResponder: () => enabledRef.current,
+      onMoveShouldSetPanResponder: () => enabledRef.current,
+      onPanResponderTerminationRequest: () => !enabledRef.current,
+      onShouldBlockNativeResponder: () => enabledRef.current,
+
+      // --- GRANT ---
       onPanResponderGrant: (evt) => {
         const { locationX, locationY } = evt.nativeEvent;
         const t = toolRef.current;
+        const touch: Point = { x: locationX, y: locationY };
 
-        if (t === 'text') {
-          // Open text input modal at tap position (handled via state, not ref)
-          // We need to call the state setter from outside the PanResponder closure
-          // Use a ref-based callback pattern
-          textPromptRef.current?.({ x: locationX, y: locationY });
+        // If editing a text and tapped outside it, dismiss editing first
+        if (editingTextIndexRef.current !== null) {
+          finalizeTextEditRef.current?.();
+          return; // Consume this tap (don't start a new action)
+        }
+
+        // --- Eraser ---
+        if (t === 'eraser') {
+          eraseAtPointRef.current?.(touch);
           return;
         }
 
+        // --- Text tool ---
+        if (t === 'text') {
+          const hitIndex = textsRef.current.findIndex((txt) => isTextHit(touch, txt));
+          if (hitIndex >= 0) {
+            // Touched an existing text — prepare for drag or tap-to-edit
+            const txt = textsRef.current[hitIndex];
+            draggingTextRef.current = {
+              index: hitIndex,
+              startX: locationX,
+              startY: locationY,
+              origX: txt.x,
+              origY: txt.y,
+            };
+            didDragRef.current = false;
+          } else {
+            // Tap on empty space — create a new text box and start editing
+            const newText: DrawingText = {
+              text: '',
+              x: locationX,
+              y: locationY,
+              color: colorRef.current,
+              fontSize: Math.max(strokeWidthRef.current * 3, 14),
+            };
+            const newTexts = [...textsRef.current, newText];
+            textsRef.current = newTexts;
+            setTexts(newTexts);
+            const newIndex = newTexts.length - 1;
+            editingTextIndexRef.current = newIndex;
+            setEditingTextIndex(newIndex);
+          }
+          return;
+        }
+
+        // --- Shape tools ---
         if (t === 'circle' || t === 'rect' || t === 'arrow') {
           const shape: DrawingShape = {
             type: t,
@@ -179,41 +350,98 @@ export default function DrawingCanvas({
           };
           currentShapeRef.current = shape;
           setCurrentShape(shape);
-        } else {
-          const point = { x: locationX, y: locationY };
-          currentPathRef.current = [point];
-          setCurrentPath([point]);
+          return;
         }
+
+        // --- Freeform (pen / highlighter) ---
+        const point = { x: locationX, y: locationY };
+        currentPathRef.current = [point];
+        setCurrentPath([point]);
       },
+
+      // --- MOVE ---
       onPanResponderMove: (evt) => {
         const { locationX, locationY } = evt.nativeEvent;
         const t = toolRef.current;
 
-        if (t === 'text') return;
+        // Eraser: continuously remove elements under finger
+        if (t === 'eraser') {
+          eraseAtPointRef.current?.({ x: locationX, y: locationY });
+          return;
+        }
 
+        // Text drag
+        if (t === 'text') {
+          if (draggingTextRef.current) {
+            const { index, startX, startY, origX, origY } = draggingTextRef.current;
+            const dx = locationX - startX;
+            const dy = locationY - startY;
+
+            if (!didDragRef.current && dx * dx + dy * dy >= DRAG_THRESHOLD_SQ) {
+              didDragRef.current = true;
+            }
+
+            if (didDragRef.current) {
+              const updated = [...textsRef.current];
+              updated[index] = { ...updated[index], x: origX + dx, y: origY + dy };
+              textsRef.current = updated;
+              setTexts(updated);
+            }
+          }
+          return;
+        }
+
+        // Shape preview
         if (t === 'circle' || t === 'rect' || t === 'arrow') {
           if (currentShapeRef.current) {
             const updated = { ...currentShapeRef.current, end: { x: locationX, y: locationY } };
             currentShapeRef.current = updated;
             setCurrentShape(updated);
           }
-        } else {
-          if (currentPathRef.current && currentPathRef.current.length > 0) {
-            const last = currentPathRef.current[currentPathRef.current.length - 1];
-            const dx = locationX - last.x;
-            const dy = locationY - last.y;
-            if (dx * dx + dy * dy < MIN_POINT_DISTANCE_SQ) return;
+          return;
+        }
 
-            const updated = [...currentPathRef.current, { x: locationX, y: locationY }];
-            currentPathRef.current = updated;
-            setCurrentPath(updated);
-          }
+        // Freeform path
+        if (currentPathRef.current && currentPathRef.current.length > 0) {
+          const last = currentPathRef.current[currentPathRef.current.length - 1];
+          const dx = locationX - last.x;
+          const dy = locationY - last.y;
+          if (dx * dx + dy * dy < MIN_POINT_DISTANCE_SQ) return;
+
+          const updated = [...currentPathRef.current, { x: locationX, y: locationY }];
+          currentPathRef.current = updated;
+          setCurrentPath(updated);
         }
       },
-      onPanResponderRelease: (evt) => {
-        const t = toolRef.current;
-        if (t === 'text') return;
 
+      // --- RELEASE ---
+      onPanResponderRelease: () => {
+        const t = toolRef.current;
+
+        if (t === 'eraser') return;
+
+        // Text: finalize drag or enter edit mode (tap)
+        if (t === 'text') {
+          if (draggingTextRef.current) {
+            const { index } = draggingTextRef.current;
+            if (!didDragRef.current) {
+              // Was a tap → enter edit mode
+              editingTextIndexRef.current = index;
+              setEditingTextIndex(index);
+            } else {
+              // Was a drag → notify position change
+              onDrawingChangeRef.current?.({
+                paths: pathsRef.current,
+                shapes: shapesRef.current,
+                texts: textsRef.current,
+              });
+            }
+            draggingTextRef.current = null;
+          }
+          return;
+        }
+
+        // Shape: finalize
         if (t === 'circle' || t === 'rect' || t === 'arrow') {
           if (currentShapeRef.current) {
             const newShapes = [...shapesRef.current, currentShapeRef.current];
@@ -221,38 +449,35 @@ export default function DrawingCanvas({
             shapesRef.current = newShapes;
             currentShapeRef.current = null;
             setCurrentShape(null);
-            notifyChange(pathsRef.current, newShapes, textsRef.current);
+            onDrawingChangeRef.current?.({ paths: pathsRef.current, shapes: newShapes, texts: textsRef.current });
           }
-        } else {
-          if (currentPathRef.current && currentPathRef.current.length >= 1) {
-            // For single-point taps, duplicate the point so SVG renders a dot
-            const pts = currentPathRef.current;
-            const finalPts = pts.length === 1
-              ? [pts[0], { x: pts[0].x + 0.5, y: pts[0].y + 0.5 }]
-              : pts;
-
-            const newPath: DrawingPath = {
-              path: finalPts,
-              color: t === 'eraser' ? '#FFFFFF' : colorRef.current,
-              strokeWidth: t === 'eraser' ? strokeWidthRef.current * 2 : strokeWidthRef.current,
-              tool: t,
-              opacity: t === 'highlighter' ? 0.4 : opacityRef.current,
-            };
-            const newPaths = [...pathsRef.current, newPath];
-            setPaths(newPaths);
-            pathsRef.current = newPaths;
-            notifyChange(newPaths, shapesRef.current, textsRef.current);
-          }
-          currentPathRef.current = null;
-          setCurrentPath(null);
+          return;
         }
+
+        // Freeform: finalize path
+        if (currentPathRef.current && currentPathRef.current.length >= 1) {
+          const pts = currentPathRef.current;
+          const finalPts = pts.length === 1
+            ? [pts[0], { x: pts[0].x + 0.5, y: pts[0].y + 0.5 }]
+            : pts;
+
+          const newPath: DrawingPath = {
+            path: finalPts,
+            color: colorRef.current,
+            strokeWidth: strokeWidthRef.current,
+            tool: t,
+            opacity: t === 'highlighter' ? 0.4 : opacityRef.current,
+          };
+          const newPaths = [...pathsRef.current, newPath];
+          setPaths(newPaths);
+          pathsRef.current = newPaths;
+          onDrawingChangeRef.current?.({ paths: newPaths, shapes: shapesRef.current, texts: textsRef.current });
+        }
+        currentPathRef.current = null;
+        setCurrentPath(null);
       },
     })
   ).current;
-
-  // Ref-based callback for text prompt (allows PanResponder to trigger state update)
-  const textPromptRef = useRef<((pos: { x: number; y: number }) => void) | null>(null);
-  textPromptRef.current = handleTextPromptOpen;
 
   // Sync external data (undo/redo/clear)
   useEffect(() => {
@@ -266,99 +491,82 @@ export default function DrawingCanvas({
     }
   }, [initialData]);
 
+  // -----------------------------------------------------------------------
+  // Render
+  // -----------------------------------------------------------------------
   return (
-    <>
-      <View style={[styles.container, { width, height }]} {...panResponder.panHandlers}>
-        <Svg width={width} height={height}>
-          {/* Completed paths */}
-          {paths.map((item, index) => (
-            <SvgPath
-              key={`path-${index}`}
-              d={pointsToSvgPath(item.path)}
-              stroke={item.color}
-              strokeWidth={item.strokeWidth}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              fill="none"
-              opacity={item.opacity ?? 1}
-            />
-          ))}
+    <View style={[styles.container, { width, height }]} {...panResponder.panHandlers}>
+      <Svg width={width} height={height}>
+        {/* Completed paths */}
+        {paths.map((item, index) => (
+          <SvgPath
+            key={`path-${index}`}
+            d={pointsToSvgPath(item.path)}
+            stroke={item.color}
+            strokeWidth={item.strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            fill="none"
+            opacity={item.opacity ?? 1}
+          />
+        ))}
 
-          {/* In-progress path */}
-          {currentPath && currentPath.length >= 2 && (
-            <SvgPath
-              d={pointsToSvgPath(currentPath)}
-              stroke={tool === 'eraser' ? '#FFFFFF' : color}
-              strokeWidth={tool === 'eraser' ? strokeWidth * 2 : strokeWidth}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              fill="none"
-              opacity={tool === 'highlighter' ? 0.4 : opacity}
-            />
-          )}
+        {/* In-progress path */}
+        {currentPath && currentPath.length >= 2 && (
+          <SvgPath
+            d={pointsToSvgPath(currentPath)}
+            stroke={color}
+            strokeWidth={strokeWidth}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            fill="none"
+            opacity={tool === 'highlighter' ? 0.4 : opacity}
+          />
+        )}
 
-          {/* Completed shapes */}
-          {shapes.map((shape, index) => renderShape(shape, `shape-${index}`))}
+        {/* Completed shapes */}
+        {shapes.map((shape, index) => renderShape(shape, `shape-${index}`))}
 
-          {/* In-progress shape */}
-          {currentShape && renderShape(currentShape, 'shape-current')}
+        {/* In-progress shape */}
+        {currentShape && renderShape(currentShape, 'shape-current')}
+      </Svg>
 
-          {/* Texts */}
-          {texts.map((item, index) => (
-            <SvgText
-              key={`text-${index}`}
-              x={item.x}
-              y={item.y}
-              fill={item.color}
-              fontSize={item.fontSize}
-              fontFamily="System"
-            >
+      {/* Text overlays — rendered as RN Views (not SVG) so they can be edited */}
+      {texts.map((item, index) =>
+        editingTextIndex === index ? (
+          <TextInput
+            key={`text-edit-${index}`}
+            style={[
+              styles.textEditInput,
+              { left: item.x, top: item.y, color: item.color, fontSize: item.fontSize },
+            ]}
+            value={item.text}
+            placeholder="Type here..."
+            placeholderTextColor={colors.textSecondary}
+            onChangeText={(t) => handleTextChange(index, t)}
+            autoFocus
+            multiline
+            onBlur={() => finalizeTextEditRef.current?.()}
+          />
+        ) : item.text ? (
+          <View
+            key={`text-${index}`}
+            style={[styles.textOverlay, { left: item.x, top: item.y }]}
+            pointerEvents="none"
+          >
+            <Text style={{ color: item.color, fontSize: item.fontSize }}>
               {item.text}
-            </SvgText>
-          ))}
-        </Svg>
-      </View>
-
-      {/* Text input modal */}
-      <Modal
-        visible={textPrompt !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setTextPrompt(null)}
-      >
-        <KeyboardAvoidingView
-          style={styles.textModalOverlay}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setTextPrompt(null)} />
-          <View style={styles.textModalContent}>
-            <Text style={styles.textModalTitle}>Add Text</Text>
-            <TextInput
-              style={styles.textModalInput}
-              placeholder="Type here..."
-              placeholderTextColor={colors.textSecondary}
-              value={textInputValue}
-              onChangeText={setTextInputValue}
-              autoFocus
-              multiline
-              onSubmitEditing={handleTextConfirm}
-              blurOnSubmit
-            />
-            <View style={styles.textModalActions}>
-              <Pressable style={styles.textModalCancel} onPress={() => setTextPrompt(null)}>
-                <Text style={styles.textModalCancelText}>Cancel</Text>
-              </Pressable>
-              <Pressable style={styles.textModalConfirm} onPress={handleTextConfirm}>
-                <Text style={styles.textModalConfirmText}>Place</Text>
-              </Pressable>
-            </View>
+            </Text>
           </View>
-        </KeyboardAvoidingView>
-      </Modal>
-    </>
+        ) : null,
+      )}
+    </View>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Shape renderer (unchanged)
+// ---------------------------------------------------------------------------
 function renderShape(shape: DrawingShape, key: string) {
   if (shape.type === 'circle') {
     const rx = Math.abs(shape.end.x - shape.start.x);
@@ -403,7 +611,7 @@ function renderShape(shape: DrawingShape, key: string) {
       shape.end.x - shape.start.x,
     );
     const headLength = 20;
-    const headAngle = Math.PI / 6; // 30 degrees
+    const headAngle = Math.PI / 6;
 
     const tip = shape.end;
     const left = {
@@ -437,66 +645,29 @@ function renderShape(shape: DrawingShape, key: string) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Styles
+// ---------------------------------------------------------------------------
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
     top: 0,
     left: 0,
   },
-  // Text input modal
-  textModalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: spacing.pagePadding,
+  textOverlay: {
+    position: 'absolute',
+    paddingHorizontal: spacing.innerGapSmall,
+    paddingVertical: 2,
   },
-  textModalContent: {
-    backgroundColor: colors.surface,
-    borderRadius: radii.card,
-    padding: spacing.pagePadding,
-    width: '100%',
-    maxWidth: 360,
-    ...shadows.modalSheet,
-  },
-  textModalTitle: {
-    ...typography.cardTitle,
-    color: colors.textPrimary,
-    marginBottom: spacing.innerGap,
-  },
-  textModalInput: {
-    ...typography.body,
-    color: colors.textPrimary,
-    backgroundColor: colors.surfaceMuted,
+  textEditInput: {
+    position: 'absolute',
+    borderWidth: 1,
+    borderColor: colors.primary,
     borderRadius: radii.chip,
-    padding: spacing.innerGap,
-    minHeight: 80,
-    textAlignVertical: 'top',
-  },
-  textModalActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: spacing.innerGapSmall,
-    marginTop: spacing.innerGap,
-  },
-  textModalCancel: {
-    paddingHorizontal: spacing.pagePadding,
-    paddingVertical: spacing.innerGapSmall,
-    borderRadius: radii.chip,
-    backgroundColor: colors.surfaceMuted,
-  },
-  textModalCancelText: {
-    ...typography.cardTitle,
-    color: colors.textSecondary,
-  },
-  textModalConfirm: {
-    paddingHorizontal: spacing.pagePadding,
-    paddingVertical: spacing.innerGapSmall,
-    borderRadius: radii.chip,
-    backgroundColor: colors.primary,
-  },
-  textModalConfirmText: {
-    ...typography.cardTitle,
-    color: colors.surface,
+    paddingHorizontal: spacing.innerGapSmall,
+    paddingVertical: 2,
+    minWidth: 60,
+    minHeight: 28,
+    backgroundColor: 'rgba(255,255,255,0.85)',
   },
 });
