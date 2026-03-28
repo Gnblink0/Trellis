@@ -10,6 +10,8 @@ import {
   getRecentWorksheets,
   type RecentWorksheet,
 } from '../services/recentWorksheets';
+import { hasSession, loadSession } from '../services/worksheetSessionStore';
+import { setStudentViewData } from '../services/studentViewStore';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
@@ -28,9 +30,15 @@ function formatRelativeTime(ts: number): string {
 export default function HomeScreen() {
   const navigation = useNavigation<Nav>();
   const [recents, setRecents] = useState<RecentWorksheet[]>([]);
+  const [sessionIds, setSessionIds] = useState<Set<string>>(new Set());
 
   const loadRecents = useCallback(() => {
-    void getRecentWorksheets().then(setRecents);
+    void getRecentWorksheets().then((items) => {
+      setRecents(items);
+      // Check which worksheets have persisted sessions
+      void Promise.all(items.map((w) => hasSession(w.id).then((has) => (has ? w.id : null))))
+        .then((ids) => setSessionIds(new Set(ids.filter((id): id is string => id !== null))));
+    });
   }, []);
 
   useFocusEffect(
@@ -91,15 +99,30 @@ export default function HomeScreen() {
             </Text>
           ) : (
             <View style={styles.recentList}>
-              {recents.map((item) => (
+              {recents.map((item) => {
+                const hasStoredSession = sessionIds.has(item.id);
+                return (
                 <Pressable
                   key={item.id}
                   style={styles.recentCard}
-                  onPress={() =>
+                  onPress={async () => {
+                    if (hasStoredSession) {
+                      const session = await loadSession(item.id);
+                      if (session) {
+                        setStudentViewData({
+                          title: session.title,
+                          adaptations: session.adaptations,
+                          imageUri: session.imageUri,
+                          worksheetId: session.worksheetId,
+                        });
+                        navigation.navigate('StudentView');
+                        return;
+                      }
+                    }
                     navigation.navigate('Process', {
                       imageUri: item.imageUri,
-                    })
-                  }
+                    });
+                  }}
                 >
                   <View style={styles.thumbnail}>
                     {Platform.OS === 'web' ? (
@@ -117,9 +140,17 @@ export default function HomeScreen() {
                     )}
                   </View>
                   <View style={styles.recentInfo}>
-                    <Text style={styles.recentTitle} numberOfLines={1}>
-                      {item.title}
-                    </Text>
+                    <View style={styles.recentTitleRow}>
+                      <Text style={styles.recentTitle} numberOfLines={1}>
+                        {item.title}
+                      </Text>
+                      {hasStoredSession && (
+                        <View style={styles.resumeBadge}>
+                          <Ionicons name="play-circle" size={14} color={colors.primary} />
+                          <Text style={styles.resumeBadgeText}>Resume</Text>
+                        </View>
+                      )}
+                    </View>
                     <Text style={styles.recentMeta}>
                       {formatRelativeTime(item.createdAt)}
                     </Text>
@@ -130,7 +161,8 @@ export default function HomeScreen() {
                     color={colors.textSecondary}
                   />
                 </Pressable>
-              ))}
+                );
+              })}
             </View>
           )}
         </View>
@@ -275,9 +307,28 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: spacing.innerGapSmall,
   },
+  recentTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.innerGapSmall,
+  },
   recentTitle: {
     ...typography.cardTitle,
     color: colors.textPrimary,
+    flexShrink: 1,
+  },
+  resumeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: colors.primaryLight,
+    borderRadius: radii.chip,
+    paddingHorizontal: spacing.innerGapSmall,
+    paddingVertical: 2,
+  },
+  resumeBadgeText: {
+    ...typography.caption,
+    color: colors.primary,
   },
   recentMeta: {
     ...typography.caption,

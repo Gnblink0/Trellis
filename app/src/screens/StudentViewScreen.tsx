@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, typography, spacing, radii, shadows } from '../theme';
 import { RootStackParamList, AdaptedZone } from '../navigation/types';
@@ -22,6 +23,7 @@ import type { DrawingTool, DrawingData } from '../components/DrawingCanvas';
 import DrawingToolbar from '../components/DrawingToolbar';
 import FloatingMarker, { MarkerData } from '../components/FloatingMarker';
 import { consumeStudentViewData } from '../services/studentViewStore';
+import { saveSession, loadSession } from '../services/worksheetSessionStore';
 
 // Native-only imports (captureRef, Sharing)
 let captureRef: any = null;
@@ -78,14 +80,17 @@ const DEMO_IMAGE_ASPECT = 595 / 842; // fallback for bundled demo worksheet
 // ---------------------------------------------------------------------------
 // Main student screen
 // ---------------------------------------------------------------------------
+type Nav = NativeStackNavigationProp<RootStackParamList, 'StudentView'>;
+
 export default function StudentViewScreen() {
-  const navigation = useNavigation();
+  const navigation = useNavigation<Nav>();
 
   // Read large data from module store (avoids React Navigation param serialisation crash)
   const [storeData] = useState(() => consumeStudentViewData());
   const title = storeData?.title ?? 'Worksheet';
   const adaptations = storeData?.adaptations ?? [];
   const imageUri = storeData?.imageUri;
+  const worksheetId = storeData?.worksheetId;
 
   const [pageIndex, setPageIndex] = useState(0);
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
@@ -115,6 +120,40 @@ export default function StudentViewScreen() {
   const [hideMarkersForExport, setHideMarkersForExport] = useState(false);
 
   const [drawingActive, setDrawingActive] = useState(false);
+
+  // Restore previous drawing data from persisted session
+  useEffect(() => {
+    if (!worksheetId) return;
+    let cancelled = false;
+    void loadSession(worksheetId).then((session) => {
+      if (cancelled || !session) return;
+      const d = session.drawingData;
+      if (d && (d.paths.length > 0 || d.shapes.length > 0 || d.texts.length > 0)) {
+        setDrawingData(d);
+        setDrawingHistory([d]);
+        setHistoryIndex(0);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [worksheetId]);
+
+  // Debounce auto-save drawings to session store
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => {
+    if (!worksheetId) return;
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveSession({
+        worksheetId,
+        updatedAt: Date.now(),
+        title,
+        imageUri,
+        adaptations,
+        drawingData,
+      });
+    }, 1500);
+    return () => clearTimeout(saveTimerRef.current);
+  }, [drawingData, worksheetId]);
 
   const captureViewRef = useRef<View>(null);
   const currentPage = PAGES[pageIndex];
@@ -215,6 +254,38 @@ export default function StudentViewScreen() {
     newHistory.push(data);
     setDrawingHistory(newHistory);
     setHistoryIndex(newHistory.length - 1);
+  };
+
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleSave = async () => {
+    if (isSaving) return;
+    if (!worksheetId) {
+      // No session to persist (web or no worksheetId) — just go home
+      navigation.popToTop();
+      return;
+    }
+    setIsSaving(true);
+    try {
+      await saveSession({
+        worksheetId,
+        updatedAt: Date.now(),
+        title,
+        imageUri,
+        adaptations,
+        drawingData,
+      });
+      navigation.popToTop();
+    } catch (e) {
+      console.error('[StudentViewScreen] handleSave', e);
+      if (Platform.OS === 'web') {
+        window.alert('Failed to save. Please try again.');
+      } else {
+        Alert.alert('Save Failed', 'Could not save your work. Please try again.', [{ text: 'OK' }]);
+      }
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleExport = async () => {
@@ -415,8 +486,8 @@ export default function StudentViewScreen() {
         />
       </View>
 
-      {/* Bottom-right floating controls */}
-      <View style={styles.bottomRightControls}>
+      {/* Bottom action bar */}
+      <View style={styles.bottomBar}>
         {/* Draw/Scroll mode toggle */}
         <Pressable
           style={[styles.modeToggle, drawingActive && styles.modeToggleActive]}
@@ -434,14 +505,39 @@ export default function StudentViewScreen() {
           </Text>
         </Pressable>
 
-        {/* Export button */}
-        <Pressable
-          style={styles.fab}
-          onPress={handleExport}
-        >
-          <Ionicons name={isExporting ? 'hourglass' : 'download-outline'} size={20} color={colors.surface} />
-          <Text style={styles.fabText}>{isExporting ? 'Exporting...' : 'Export'}</Text>
-        </Pressable>
+        <View style={styles.bottomBarActions}>
+          {/* Save button */}
+          <Pressable
+            style={styles.saveBtn}
+            onPress={handleSave}
+            disabled={isSaving}
+          >
+            <Ionicons
+              name={isSaving ? 'hourglass' : 'save-outline'}
+              size={20}
+              color={colors.primary}
+            />
+            <Text style={styles.saveBtnText}>
+              {isSaving ? 'Saving...' : 'Save & Exit'}
+            </Text>
+          </Pressable>
+
+          {/* Export button */}
+          <Pressable
+            style={styles.fab}
+            onPress={handleExport}
+            disabled={isExporting}
+          >
+            <Ionicons
+              name={isExporting ? 'hourglass' : 'download-outline'}
+              size={20}
+              color={colors.surface}
+            />
+            <Text style={styles.fabText}>
+              {isExporting ? 'Exporting...' : 'Export'}
+            </Text>
+          </Pressable>
+        </View>
       </View>
     </SafeAreaView>
   );
@@ -476,7 +572,7 @@ const styles = StyleSheet.create({
   // Worksheet
   worksheetArea: { flex: 1, paddingHorizontal: spacing.pagePadding },
   worksheetScroll: { flex: 1 },
-  worksheetScrollContent: { paddingBottom: 100 },
+  worksheetScrollContent: { paddingBottom: spacing.pagePadding },
   imageWrapper: { position: 'relative' },
   worksheetImage: { width: '100%', borderRadius: radii.chip },
 
@@ -538,23 +634,30 @@ const styles = StyleSheet.create({
     left: spacing.pagePadding,
   },
 
-  // Bottom-right floating controls (mode toggle + export)
-  bottomRightControls: {
-    position: 'absolute',
-    bottom: 40,
-    right: spacing.pagePadding,
-    alignItems: 'flex-end',
+  // Bottom action bar
+  bottomBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.pagePadding,
+    paddingVertical: spacing.innerGapSmall,
+    backgroundColor: colors.surface,
+    borderTopWidth: 1,
+    borderTopColor: colors.surfaceMuted,
+  },
+  bottomBarActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: spacing.innerGapSmall,
   },
   modeToggle: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.innerGapSmall,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceMuted,
     borderRadius: radii.circle,
     paddingHorizontal: spacing.innerGap,
     paddingVertical: spacing.innerGapSmall,
-    ...shadows.floatingToolbar,
   },
   modeToggleActive: {
     backgroundColor: colors.primary,
@@ -566,6 +669,19 @@ const styles = StyleSheet.create({
   modeToggleTextActive: {
     color: colors.surface,
   },
+  saveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primaryLight,
+    borderRadius: radii.circle,
+    paddingHorizontal: spacing.pagePadding,
+    paddingVertical: spacing.innerGapSmall,
+    gap: spacing.innerGapSmall,
+  },
+  saveBtnText: {
+    ...typography.cardTitle,
+    color: colors.primary,
+  },
   fab: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -574,7 +690,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.pagePadding,
     paddingVertical: spacing.innerGapSmall,
     gap: spacing.innerGapSmall,
-    ...shadows.fab,
   },
   fabText: { ...typography.cardTitle, color: colors.surface },
 });

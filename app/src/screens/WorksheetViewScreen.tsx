@@ -23,6 +23,7 @@ import FloatingMarker, { MarkerData } from '../components/FloatingMarker';
 import AdaptationPreviewModal from '../components/AdaptationPreviewModal';
 import { processWorksheet, scanImageOcr } from '../services/adaptApi';
 import { setStudentViewData } from '../services/studentViewStore';
+import { saveSession } from '../services/worksheetSessionStore';
 import type { DetectedBlock, Toggles, OcrScanResponse } from '@trellis/shared';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'WorksheetView'>;
@@ -235,6 +236,7 @@ export default function WorksheetViewScreen() {
     : DEMO_PAGES[0].image;
 
   const worksheetTitle = isRealMode ? 'Worksheet' : 'The Water Cycle';
+  const worksheetId = params?.worksheetId;
 
   // Keep a lookup from blockId -> DetectedBlock for original text
   const blockLookup = isRealMode
@@ -857,11 +859,24 @@ export default function WorksheetViewScreen() {
             },
           );
 
+          // Persist session so HomeScreen can resume later
+          if (worksheetId) {
+            saveSession({
+              worksheetId,
+              updatedAt: Date.now(),
+              title: worksheetTitle,
+              imageUri: params?.imageUri,
+              adaptations: adapted,
+              drawingData: { paths: [], shapes: [], texts: [] },
+            });
+          }
+
           // Store large data (base64 visualUrls) outside nav params to avoid serialisation crash
           setStudentViewData({
             title: worksheetTitle,
             adaptations: adapted,
             imageUri: isRealMode ? params!.imageUri : undefined,
+            worksheetId,
           });
           navigation.navigate('StudentView');
         }}

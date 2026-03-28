@@ -7,7 +7,7 @@ import type { AdaptedZone } from '../navigation/types';
  * chokes on multi-MB base64 visualUrls).
  */
 
-let _pending: { title: string; adaptations: AdaptedZone[]; imageUri?: string } | null = null;
+let _pending: { title: string; adaptations: AdaptedZone[]; imageUri?: string; worksheetId?: string } | null = null;
 
 export function setStudentViewData(data: typeof _pending) {
   _pending = data;

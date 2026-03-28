@@ -156,6 +156,7 @@ export default function ProcessScreen() {
         imageUri: resolvedUri,
         imageBase64,
         toggles: { visualSupport, simplifyLevel, summarize },
+        worksheetId: worksheetIdRef.current ?? undefined,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'An unexpected error occurred.';

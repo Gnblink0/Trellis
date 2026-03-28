@@ -34,6 +34,7 @@ export type RootStackParamList = {
     imageUri: string;
     imageBase64: string;
     toggles: Toggles;
+    worksheetId?: string;
   } | undefined;
   StudentView: undefined;  // data passed via studentViewStore (avoids nav param serialisation crash)
   Export: { title: string; adaptations: AdaptationSummary[] } | undefined;
