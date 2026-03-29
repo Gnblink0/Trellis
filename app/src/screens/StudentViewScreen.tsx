@@ -23,7 +23,8 @@ import type { DrawingTool, DrawingData } from '../components/DrawingCanvas';
 import DrawingToolbar from '../components/DrawingToolbar';
 import FloatingMarker, { MarkerData } from '../components/FloatingMarker';
 import { consumeStudentViewData } from '../services/studentViewStore';
-import { saveSession, loadSession } from '../services/worksheetSessionStore';
+import { saveSession, loadSession, deleteSession } from '../services/worksheetSessionStore';
+import { deleteWorksheet } from '../services/recentWorksheets';
 
 // Native-only imports (captureRef, Sharing)
 let captureRef: any = null;
@@ -120,6 +121,7 @@ export default function StudentViewScreen() {
   const [hideMarkersForExport, setHideMarkersForExport] = useState(false);
 
   const [drawingActive, setDrawingActive] = useState(false);
+  const [zoomScale, setZoomScale] = useState(1);
 
   // Restore previous drawing data from persisted session
   useEffect(() => {
@@ -329,9 +331,49 @@ export default function StudentViewScreen() {
     }
   };
 
+  const handleMenuPress = () => {
+    Alert.alert(
+      'Worksheet Options',
+      undefined,
+      [
+        {
+          text: 'Delete Worksheet',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Delete Worksheet',
+              'Are you sure you want to delete this worksheet? This action cannot be undone.',
+              [
+                {
+                  text: 'Cancel',
+                  style: 'cancel',
+                },
+                {
+                  text: 'Delete',
+                  style: 'destructive',
+                  onPress: async () => {
+                    if (worksheetId) {
+                      await deleteSession(worksheetId);
+                      await deleteWorksheet(worksheetId);
+                    }
+                    navigation.goBack();
+                  },
+                },
+              ]
+            );
+          },
+        },
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+      ]
+    );
+  };
+
   return (
     <SafeAreaView style={styles.safe}>
-      <ScreenHeader title={title} />
+      <ScreenHeader title={title} onMenuPress={handleMenuPress} />
 
       {/* Student mode banner */}
       <View style={styles.banner}>
@@ -396,6 +438,17 @@ export default function StudentViewScreen() {
             contentContainerStyle={styles.worksheetScrollContent}
             showsVerticalScrollIndicator={false}
             scrollEnabled={!drawingActive}
+            minimumZoomScale={1}
+            maximumZoomScale={3}
+            bouncesZoom={true}
+            pinchGestureEnabled={!drawingActive}
+            onScroll={(e) => {
+              const scale = e.nativeEvent.zoomScale;
+              if (scale !== undefined && scale !== zoomScale) {
+                setZoomScale(scale);
+              }
+            }}
+            scrollEventThrottle={16}
           >
             <View
               ref={captureViewRef}

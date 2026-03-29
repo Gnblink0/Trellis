@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   Alert,
   Platform,
   StyleSheet,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -16,14 +17,38 @@ import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, typography, spacing, radii, shadows } from '../theme';
 import { RootStackParamList } from '../navigation/types';
+import WorksheetCropEditor from '../components/WorksheetCropEditor';
+import { getImageSize, WORKSHEET_MERGE_MAX_WIDTH } from '../utils/worksheetImages';
+
+// Native-only: react-native-view-shot for merging pages
+let captureRef: any = null;
+if (Platform.OS !== 'web') {
+  try {
+    captureRef = require('react-native-view-shot').captureRef;
+  } catch {
+    // unavailable
+  }
+}
 
 const MAX_PAGES = 15;
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'WorksheetCapture'>;
 
+type PageSize = { width: number; height: number };
+
 export default function WorksheetCaptureScreen() {
   const navigation = useNavigation<Nav>();
   const [pages, setPages] = useState<string[]>([]);
+  /** URI pending crop — when set, the crop editor is shown. */
+  const [pendingCropUri, setPendingCropUri] = useState<string | null>(null);
+  /** Merging state — page sizes resolved, merge view rendered, capturing. */
+  const [isMerging, setIsMerging] = useState(false);
+  const [pageSizes, setPageSizes] = useState<PageSize[]>([]);
+  const mergeViewRef = useRef<View>(null);
+  /** Resolves when all images in the merge view have loaded. */
+  const mergeImagesReadyRef = useRef<{ loaded: number; total: number; resolve: (() => void) | null }>({
+    loaded: 0, total: 0, resolve: null,
+  });
 
   const remainingSlots = MAX_PAGES - pages.length;
 
@@ -43,10 +68,9 @@ export default function WorksheetCaptureScreen() {
     }
     const result = await ImagePicker.launchCameraAsync({
       quality: 0.9,
-      allowsEditing: true,
     });
     if (result.canceled || !result.assets?.[0]) return;
-    setPages((p) => [...p, result.assets[0].uri]);
+    setPendingCropUri(result.assets[0].uri);
   };
 
   const addFromLibrary = async () => {
@@ -54,24 +78,92 @@ export default function WorksheetCaptureScreen() {
       Alert.alert('Page limit', `You can add up to ${MAX_PAGES} pages.`);
       return;
     }
-    // Use system crop UI (allowsEditing) — picks one image at a time
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       quality: 0.9,
-      allowsEditing: true,
     });
     if (result.canceled || !result.assets?.[0]) return;
-    setPages((p) => [...p, result.assets[0].uri]);
+    setPendingCropUri(result.assets[0].uri);
   };
 
   const removePage = (index: number) => {
     setPages((p) => p.filter((_, i) => i !== index));
   };
 
-  const handleContinue = () => {
+  const handleContinue = async () => {
     if (pages.length === 0) return;
-    navigation.navigate('Process', { imageUri: pages[0] });
+
+    // Single page — navigate directly
+    if (pages.length === 1) {
+      navigation.navigate('Process', { imageUri: pages[0] });
+      return;
+    }
+
+    // Multiple pages — merge into one tall image
+    if (!captureRef) {
+      // Fallback: just send first page if view-shot unavailable
+      navigation.navigate('Process', { imageUri: pages[0] });
+      return;
+    }
+
+    setIsMerging(true);
+    try {
+      // Resolve all image sizes
+      const sizes = await Promise.all(pages.map((uri) => getImageSize(uri)));
+
+      // Prepare promise that resolves when all <Image> onLoad fire
+      const allLoaded = new Promise<void>((resolve) => {
+        mergeImagesReadyRef.current = { loaded: 0, total: pages.length, resolve };
+      });
+
+      setPageSizes(sizes);
+
+      // Wait for every image in the merge view to finish loading
+      await allLoaded;
+
+      // One extra frame to ensure pixels are flushed to the native view
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+      const uri = await captureRef(mergeViewRef, {
+        format: 'jpg',
+        quality: 0.9,
+        result: 'tmpfile',
+      });
+      navigation.navigate('Process', { imageUri: uri });
+    } catch (e) {
+      console.error('[WorksheetCapture] merge failed:', e);
+      Alert.alert('Merge Error', 'Could not merge pages. Using first page only.', [
+        {
+          text: 'OK',
+          onPress: () => navigation.navigate('Process', { imageUri: pages[0] }),
+        },
+      ]);
+    } finally {
+      setIsMerging(false);
+      setPageSizes([]);
+      mergeImagesReadyRef.current = { loaded: 0, total: 0, resolve: null };
+    }
   };
+
+  // ── Crop editor is shown as a full-screen overlay ──
+  if (pendingCropUri) {
+    return (
+      <WorksheetCropEditor
+        uri={pendingCropUri}
+        onConfirm={(croppedUri) => {
+          setPages((p) => [...p, croppedUri]);
+          setPendingCropUri(null);
+        }}
+        onSkipFullImage={() => {
+          setPages((p) => [...p, pendingCropUri]);
+          setPendingCropUri(null);
+        }}
+        onCancel={() => {
+          setPendingCropUri(null);
+        }}
+      />
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -84,23 +176,22 @@ export default function WorksheetCaptureScreen() {
       </View>
 
       <Text style={styles.lead}>
-        Add one or more pages. Both camera and library photos use the system crop editor.
-        Then we scan text (Live Text style) so you can select phrases.
+        Add one or more pages. You can crop each page after picking it.
       </Text>
 
       <View style={styles.actions}>
         <Pressable
-          style={[styles.actionCard, remainingSlots <= 0 && styles.actionCardDisabled]}
+          style={[styles.actionCard, (remainingSlots <= 0 || isMerging) && styles.actionCardDisabled]}
           onPress={addFromCamera}
-          disabled={remainingSlots <= 0}
+          disabled={remainingSlots <= 0 || isMerging}
         >
           <Ionicons name="camera" size={28} color={colors.surface} />
           <Text style={styles.actionCardText}>Take photo</Text>
         </Pressable>
         <Pressable
-          style={[styles.actionOutline, remainingSlots <= 0 && styles.actionCardDisabled]}
+          style={[styles.actionOutline, (remainingSlots <= 0 || isMerging) && styles.actionCardDisabled]}
           onPress={addFromLibrary}
-          disabled={remainingSlots <= 0}
+          disabled={remainingSlots <= 0 || isMerging}
         >
           <Ionicons name="images-outline" size={22} color={colors.primary} />
           <Text style={styles.actionOutlineText}>Choose from library</Text>
@@ -133,14 +224,53 @@ export default function WorksheetCaptureScreen() {
         )}
       />
 
-      <Pressable
-        style={[styles.continueBtn, pages.length === 0 && styles.continueBtnDisabled]}
-        onPress={handleContinue}
-        disabled={pages.length === 0}
-      >
-        <Text style={styles.continueBtnText}>Continue</Text>
-        <Ionicons name="arrow-forward" size={20} color={colors.surface} />
-      </Pressable>
+      {isMerging ? (
+        <View style={styles.mergingContainer}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.mergingText}>Merging {pages.length} pages...</Text>
+        </View>
+      ) : (
+        <Pressable
+          style={[styles.continueBtn, pages.length === 0 && styles.continueBtnDisabled]}
+          onPress={handleContinue}
+          disabled={pages.length === 0}
+        >
+          <Text style={styles.continueBtnText}>Continue</Text>
+          <Ionicons name="arrow-forward" size={20} color={colors.surface} />
+        </Pressable>
+      )}
+
+      {/* Hidden merge view — stacks all pages vertically for capture */}
+      {isMerging && pageSizes.length === pages.length && (
+        <View
+          ref={mergeViewRef}
+          collapsable={false}
+          style={styles.mergeView}
+        >
+          {pages.map((uri, i) => {
+            const aspect = pageSizes[i].width / pageSizes[i].height;
+            return (
+              <Image
+                key={`merge-${i}`}
+                source={{ uri }}
+                style={{
+                  width: WORKSHEET_MERGE_MAX_WIDTH,
+                  height: WORKSHEET_MERGE_MAX_WIDTH / aspect,
+                }}
+                resizeMode="contain"
+                onLoad={() => {
+                  const ref = mergeImagesReadyRef.current;
+                  ref.loaded += 1;
+                  if (ref.loaded >= ref.total && ref.resolve) {
+                    ref.resolve();
+                    ref.resolve = null;
+                  }
+                }}
+              />
+            );
+          })}
+        </View>
+      )}
     </SafeAreaView>
   );
 }
@@ -232,4 +362,24 @@ const styles = StyleSheet.create({
   },
   continueBtnDisabled: { opacity: 0.4 },
   continueBtnText: { ...typography.button, color: colors.surface },
+
+  // Merging
+  mergingContainer: {
+    alignItems: 'center',
+    gap: spacing.innerGap,
+    marginBottom: spacing.sectionGapBottom,
+    paddingVertical: spacing.innerGap,
+  },
+  mergingText: {
+    ...typography.body,
+    color: colors.textSecondary,
+  },
+  // Off-screen view for capturing merged pages
+  mergeView: {
+    position: 'absolute',
+    top: 0,
+    left: -9999,
+    width: WORKSHEET_MERGE_MAX_WIDTH,
+    backgroundColor: colors.surface,
+  },
 });

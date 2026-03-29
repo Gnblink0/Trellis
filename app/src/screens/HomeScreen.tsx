@@ -4,7 +4,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, typography, spacing, radii } from '../theme';
+import { colors, typography, spacing, radii, shadows } from '../theme';
 import { RootStackParamList } from '../navigation/types';
 import {
   getRecentWorksheets,
@@ -66,26 +66,15 @@ export default function HomeScreen() {
           <Text style={styles.appName}>Trellis</Text>
         </View>
 
-        {/* Hero */}
-        <View style={styles.hero}>
-          <Text style={styles.heroTitle}>Snap a Worksheet</Text>
-          <Text style={styles.heroSubtitle}>
-            Add one or more worksheet pages, crop each page if you like, then adapt the
-            combined worksheet in seconds.
-          </Text>
-        </View>
-
-        {/* Primary CTA */}
-        <Pressable style={styles.cameraCta} onPress={openWorksheetCapture}>
-          <View style={styles.cameraIconCircle}>
-            <Ionicons name="camera" size={32} color={colors.surface} />
+        {/* Hero + CTA */}
+        <Pressable style={styles.heroCta} onPress={openWorksheetCapture}>
+          <View style={styles.heroCtaIcon}>
+            <Ionicons name="add" size={32} color={colors.surface} />
           </View>
-          <Text style={styles.cameraLabel}>Add worksheet pages</Text>
-        </Pressable>
-
-        <Pressable style={styles.galleryCta} onPress={openWorksheetCapture}>
-          <Ionicons name="images-outline" size={20} color={colors.primary} />
-          <Text style={styles.galleryLabel}>Take photos or choose from library</Text>
+          <Text style={styles.heroCtaTitle}>New Worksheet</Text>
+          <Text style={styles.heroCtaSubtitle}>
+            Take photos or choose from library
+          </Text>
         </Pressable>
 
         {/* Recent Worksheets */}
@@ -205,62 +194,35 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
 
-  // Hero
-  hero: {
-    alignItems: 'center',
-    paddingTop: spacing.sectionGapTop,
-    paddingBottom: spacing.sectionGapBottom,
-    gap: spacing.innerGap,
-  },
-  heroTitle: {
-    ...typography.display,
-    color: colors.textPrimary,
-    textAlign: 'center',
-  },
-  heroSubtitle: {
-    ...typography.body,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    maxWidth: 480,
-  },
-
-  // Camera CTA
-  cameraCta: {
+  // Hero CTA
+  heroCta: {
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.surface,
     borderRadius: radii.answerCard,
-    height: 200,
+    paddingVertical: spacing.sectionGapTop,
     gap: spacing.innerGapSmall,
     borderWidth: 2,
     borderColor: colors.surfaceMuted,
     borderStyle: 'dashed',
   },
-  cameraIconCircle: {
-    width: 64,
-    height: 64,
+  heroCtaIcon: {
+    width: 56,
+    height: 56,
     borderRadius: radii.circle,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
+    ...shadows.fab,
   },
-  cameraLabel: {
-    ...typography.bodySmall,
-    color: colors.textSecondary,
-  },
-
-  // Gallery CTA
-  galleryCta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.innerGapSmall,
+  heroCtaTitle: {
+    ...typography.cardTitle,
+    color: colors.textPrimary,
     marginTop: spacing.innerGapSmall,
-    paddingVertical: spacing.innerGapSmall,
   },
-  galleryLabel: {
-    ...typography.bodySmall,
-    color: colors.primary,
+  heroCtaSubtitle: {
+    ...typography.caption,
+    color: colors.textSecondary,
   },
 
   // Section

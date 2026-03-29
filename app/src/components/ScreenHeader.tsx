@@ -7,12 +7,14 @@ interface ScreenHeaderProps {
   title: string;
   showBack?: boolean;
   showMenu?: boolean;
+  onMenuPress?: () => void;
 }
 
 export default function ScreenHeader({
   title,
   showBack = true,
   showMenu = true,
+  onMenuPress,
 }: ScreenHeaderProps) {
   const navigation = useNavigation();
 
@@ -30,8 +32,8 @@ export default function ScreenHeader({
         {title}
       </Text>
 
-      {showMenu ? (
-        <Pressable style={styles.iconBtn}>
+      {showMenu && onMenuPress ? (
+        <Pressable style={styles.iconBtn} onPress={onMenuPress}>
           <Ionicons
             name="ellipsis-vertical"
             size={20}

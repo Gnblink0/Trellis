@@ -183,3 +183,20 @@ export async function updateRecentTitle(id: string, title: string): Promise<void
   next[idx] = { ...next[idx], title: trimmed };
   await saveIndex(next);
 }
+
+/**
+ * Delete a worksheet by ID, removing both the image file and index entry.
+ */
+export async function deleteWorksheet(id: string): Promise<void> {
+  if (Platform.OS === 'web') return;
+  const list = await loadIndex();
+  const item = list.find((w) => w.id === id);
+  if (!item) return;
+
+  // Delete the image file
+  await deleteFileIfExists(item.imageUri);
+
+  // Remove from index
+  const next = list.filter((w) => w.id !== id);
+  await saveIndex(next);
+}

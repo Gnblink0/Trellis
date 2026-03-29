@@ -20,21 +20,29 @@ import { Platform } from 'react-native';
  */
 function resolveApiUrl(): string {
   const envUrl = process.env.EXPO_PUBLIC_API_URL;
-  if (envUrl) return envUrl;
+  if (envUrl) {
+    console.log('[API] Using env var:', envUrl);
+    return envUrl;
+  }
 
   if (Platform.OS !== 'web') {
     // hostUri format: "192.168.1.5:8081" (LAN IP : metro port)
     const hostUri = Constants.expoConfig?.hostUri ?? Constants.manifest2?.extra?.expoGo?.debuggerHost;
+    console.log('[API] Auto-detect hostUri:', hostUri);
     if (hostUri) {
       const host = hostUri.split(':')[0]; // strip metro port
-      return `http://${host}:3001`;
+      const url = `http://${host}:3001`;
+      console.log('[API] Auto-detected URL:', url);
+      return url;
     }
   }
 
+  console.log('[API] Fallback to localhost:3001');
   return 'http://localhost:3001';
 }
 
 const API_URL = resolveApiUrl();
+console.log('[API] Final API_URL:', API_URL);
 const TIMEOUT_MS = 120_000;
 
 type ApiResult<T> =
