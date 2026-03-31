@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, typography, spacing, radii, shadows } from '../theme';
-import { DrawingTool } from './DrawingCanvas';
+import type { DrawingTool } from './DrawingCanvas';
 
 type Props = {
   tool: DrawingTool;
@@ -39,7 +39,7 @@ const STROKE_WIDTHS = [
 const TOOLS: Array<{ tool: DrawingTool; icon: keyof typeof Ionicons.glyphMap; label: string }> = [
   { tool: 'pen', icon: 'create-outline', label: 'Pen' },
   { tool: 'highlighter', icon: 'color-fill-outline', label: 'Highlighter' },
-  { tool: 'eraser', icon: 'remove-outline', label: 'Eraser' },
+  { tool: 'eraser', icon: 'close-circle-outline', label: 'Eraser' },
   { tool: 'circle', icon: 'ellipse-outline', label: 'Circle' },
   { tool: 'rect', icon: 'square-outline', label: 'Rectangle' },
   { tool: 'arrow', icon: 'arrow-forward-outline', label: 'Arrow' },

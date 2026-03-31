@@ -47,6 +47,8 @@ Server runs at `http://localhost:3001`. Verify with:
 curl http://localhost:3001/health
 ```
 
+**OCR (Live Text scan):** Worksheet pages are sent to `POST /api/ocr/scan` for Tesseract.js text detection with word boxes. The **first** OCR request may download the English model (~a few MB); keep the machine online once for that.
+
 ### 3. Start the Expo dev server
 
 Open a new terminal:
@@ -69,6 +71,22 @@ This launches the Expo dev server and shows a QR code + menu in the terminal.
 4. The app opens in Expo Go
 
 > Make sure your phone and computer are on the **same Wi-Fi network**.
+
+#### Backend API on a real iPad / phone (Expo Go)
+
+The client uses `EXPO_PUBLIC_API_URL` in `app/.env` (see `app/.env.example`). On a **physical device**, `http://localhost:3001` means the **device itself**, not your Mac, so `fetch` fails with **Network request failed**.
+
+- Use the **Mac that runs `npm run server`** as the host—not the iPad’s IP. Check the Mac’s address under **System Settings → Network** (or `ipconfig getifaddr en0` on Wi‑Fi).
+- **Always include the port** `:3001` in the URL. `http://10.0.0.50` (no port) targets port 80 and will fail; it must be `http://10.0.0.50:3001`.
+
+Steps:
+
+1. Start the server on your Mac: `npm run server` (listens on port `3001`).
+2. Find your Mac’s LAN IP (see above).
+3. In `app/.env`, set: `EXPO_PUBLIC_API_URL=http://<YOUR_MAC_IP>:3001` (example: `http://192.168.1.50:3001`).
+4. Restart Expo with a clean cache so env is picked up: `cd app && npx expo start -c`.
+
+If it still fails, check that the Mac firewall allows incoming connections for Node on port `3001`, and test from the iPad Safari: `http://<YOUR_MAC_IP>:3001/health` (should return JSON).
 
 ### Option B: iOS Simulator (macOS only)
 

@@ -5,7 +5,8 @@
   "description": "Trellis — AI Educational Assistant for adapting worksheets",
   "workspaces": [
     "app",
-    "server"
+    "server",
+    "shared"
   ],
   "scripts": {
     "app": "npm run start --workspace=app",
@@ -13,5 +14,8 @@
     "dev": "concurrently \"npm run app\" \"npm run server\""
   },
   "dependencies": {
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.0"
   }
 }
