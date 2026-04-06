@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,9 +8,12 @@ import {
   ScrollView,
   Animated,
   LayoutChangeEvent,
+  ActivityIndicator,
+  Alert,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, type RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, typography, spacing, radii, shadows } from '../theme';
@@ -18,8 +21,13 @@ import { RootStackParamList, AdaptedZone } from '../navigation/types';
 import ScreenHeader from '../components/ScreenHeader';
 import FloatingMarker, { MarkerData } from '../components/FloatingMarker';
 import AdaptationPreviewModal from '../components/AdaptationPreviewModal';
+import { processWorksheet, scanImageOcr } from '../services/adaptApi';
+import { setStudentViewData } from '../services/studentViewStore';
+import { saveSession } from '../services/worksheetSessionStore';
+import type { DetectedBlock, Toggles, OcrScanResponse } from '@trellis/shared';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'WorksheetView'>;
+type Route = RouteProp<RootStackParamList, 'WorksheetView'>;
 
 // ---------------------------------------------------------------------------
 // Action types
@@ -28,15 +36,15 @@ type ToolbarAction = 'simplify' | 'visuals' | 'summarize';
 
 const ACTION_META: Record<
   ToolbarAction,
-  { label: string; icon: keyof typeof Ionicons.glyphMap; toastText: string }
+  { label: string; icon: keyof typeof Ionicons.glyphMap }
 > = {
-  simplify: { label: 'Simplified', icon: 'text', toastText: 'Simplifying passage…' },
-  visuals: { label: 'Visuals Added', icon: 'image', toastText: 'Adding visuals…' },
-  summarize: { label: 'Summary', icon: 'list', toastText: 'Summarizing…' },
+  simplify: { label: 'Simplified', icon: 'text' },
+  visuals: { label: 'Visuals Added', icon: 'image' },
+  summarize: { label: 'Summary', icon: 'list' },
 };
 
 // ---------------------------------------------------------------------------
-// Multi-page worksheet
+// Zone type (shared between demo & real mode)
 // ---------------------------------------------------------------------------
 type Zone = {
   id: string;
@@ -44,13 +52,31 @@ type Zone = {
   rect: { top: number; left: number; width: number; height: number };
 };
 
+// ---------------------------------------------------------------------------
+// Adaptation data model — now includes state
+// ---------------------------------------------------------------------------
+type Adaptation = {
+  action: ToolbarAction;
+  state: 'loading' | 'ready' | 'reviewed' | 'error';
+  original: string;
+  result: string;
+  keywords?: string[];
+  visuals?: string[];
+  bullets?: string[];
+  visualUrl?: string;
+  errorMessage?: string;
+};
+
+// ---------------------------------------------------------------------------
+// Demo data (backward-compatible, used when no route params)
+// ---------------------------------------------------------------------------
 type WorksheetPage = {
   image: ReturnType<typeof require>;
   label: string;
   zones: Zone[];
 };
 
-const PAGES: WorksheetPage[] = [
+const DEMO_PAGES: WorksheetPage[] = [
   {
     image: require('../../assets/worksheet-page-1.png'),
     label: 'Reading',
@@ -63,238 +89,205 @@ const PAGES: WorksheetPage[] = [
       { id: 'precipitation', label: 'Precipitation', rect: { top: 27, left: 51, width: 46, height: 56 } },
     ],
   },
-  {
-    image: require('../../assets/worksheet-page-2.png'),
-    label: 'Answers',
-    zones: [
-      { id: 'q1', label: 'Q1 — Match definitions', rect: { top: 4, left: 3, width: 94, height: 28 } },
-      { id: 'q2', label: 'Q2 — True statements', rect: { top: 33, left: 3, width: 94, height: 15 } },
-      { id: 'q3', label: 'Q3 — Four stages', rect: { top: 49, left: 3, width: 94, height: 18 } },
-      { id: 'q456', label: 'Q4–Q6 — Short answers', rect: { top: 68, left: 3, width: 94, height: 24 } },
-    ],
-  },
-  {
-    image: require('../../assets/worksheet-page-3.png'),
-    label: 'Questions',
-    zones: [
-      { id: 'q1_blank', label: 'Q1 — Match definitions', rect: { top: 4, left: 3, width: 94, height: 28 } },
-      { id: 'q2_blank', label: 'Q2 — True statements', rect: { top: 33, left: 3, width: 94, height: 13 } },
-      { id: 'q3_blank', label: 'Q3 — Four stages', rect: { top: 47, left: 3, width: 94, height: 16 } },
-      { id: 'q456_blank', label: 'Q4–Q6 — Short answers', rect: { top: 64, left: 3, width: 94, height: 28 } },
-    ],
-  },
 ];
 
-// ---------------------------------------------------------------------------
-// Adaptation data model
-// ---------------------------------------------------------------------------
-type Adaptation = {
-  action: ToolbarAction;
-  original: string;
-  result: string;
-  keywords?: string[];
-  visuals?: string[];
-  bullets?: string[];
-};
-
-// Mock results per zone per action
-const MOCK_RESULTS: Record<string, Record<ToolbarAction, Adaptation>> = {
+const DEMO_RESULTS: Record<string, Record<ToolbarAction, Omit<Adaptation, 'state'>>> = {
   intro: {
-    simplify: {
-      action: 'simplify',
-      original: 'The Earth always has the same amount of water. This water moves through stages, called the water cycle. The water cycle is important to life on Earth, and the Sun plays an important role in the cycle.',
-      result: 'Earth always has the same water. Water moves in a cycle. The Sun helps the water cycle happen.',
-      keywords: ['water', 'cycle', 'Sun', 'Earth'],
-    },
-    visuals: {
-      action: 'visuals',
-      original: 'The Earth always has the same amount of water...',
-      result: 'Added visual supports for the introduction.',
-      visuals: ['🌍 Earth with water arrows', '☀️ Sun driving the cycle'],
-    },
-    summarize: {
-      action: 'summarize',
-      original: 'The Earth always has the same amount of water...',
-      result: 'Key points:',
-      bullets: ['Earth\'s water amount stays the same', 'Water moves in a cycle', 'Sun powers the cycle'],
-    },
+    simplify: { action: 'simplify', original: 'The Earth always has the same amount of water. This water moves through stages, called the water cycle.', result: 'Earth always has the same water. Water moves in a cycle. The Sun helps the water cycle happen.', keywords: ['water', 'cycle', 'Sun', 'Earth'] },
+    visuals: { action: 'visuals', original: 'The Earth always has the same amount of water...', result: 'Added visual supports for the introduction.', visuals: ['Earth with water arrows', 'Sun driving the cycle'] },
+    summarize: { action: 'summarize', original: 'The Earth always has the same amount of water...', result: 'Key points:', bullets: ['Earth\'s water amount stays the same', 'Water moves in a cycle', 'Sun powers the cycle'] },
   },
   funfact: {
-    simplify: {
-      action: 'simplify',
-      original: 'The water you drink today could have been used in a dinosaur\'s bath!',
-      result: 'The water you drink might be the same water dinosaurs used!',
-      keywords: ['water', 'dinosaurs'],
-    },
-    visuals: {
-      action: 'visuals',
-      original: 'The water you drink today could have been used in a dinosaur\'s bath!',
-      result: 'Added fun visual for the fact.',
-      visuals: ['🦕 Dinosaur with water droplets'],
-    },
-    summarize: {
-      action: 'summarize',
-      original: 'The water you drink today could have been used in a dinosaur\'s bath!',
-      result: 'Fun fact:',
-      bullets: ['Water gets reused over millions of years'],
-    },
+    simplify: { action: 'simplify', original: 'The water you drink today could have been used in a dinosaur\'s bath!', result: 'The water you drink might be the same water dinosaurs used!', keywords: ['water', 'dinosaurs'] },
+    visuals: { action: 'visuals', original: 'The water you drink today could have been used in a dinosaur\'s bath!', result: 'Added fun visual for the fact.', visuals: ['Dinosaur with water droplets'] },
+    summarize: { action: 'summarize', original: 'The water you drink today could have been used in a dinosaur\'s bath!', result: 'Fun fact:', bullets: ['Water gets reused over millions of years'] },
   },
   accumulation: {
-    simplify: {
-      action: 'simplify',
-      original: 'Accumulation is water stored in rivers, lakes, oceans, and in the soil. Oceans hold most of the Earth\'s water. Groundwater is in the soil and is absorbed by roots to help plants grow.',
-      result: 'Water collects in rivers, lakes, and oceans. Most water is in oceans. Water in the ground helps plants grow.',
-      keywords: ['rivers', 'lakes', 'oceans', 'groundwater'],
-    },
-    visuals: {
-      action: 'visuals',
-      original: 'Accumulation is water stored in rivers, lakes, oceans...',
-      result: 'Added labeled water storage diagram.',
-      visuals: ['🌊 Ocean', '🏞️ Lake & river', '🌱 Groundwater arrows'],
-    },
-    summarize: {
-      action: 'summarize',
-      original: 'Accumulation is water stored in rivers, lakes, oceans...',
-      result: 'Key points about accumulation:',
-      bullets: ['Water stored in rivers, lakes, oceans, soil', 'Oceans hold the most', 'Groundwater feeds plant roots'],
-    },
+    simplify: { action: 'simplify', original: 'Accumulation is water stored in rivers, lakes, oceans, and in the soil.', result: 'Water collects in rivers, lakes, and oceans. Most water is in oceans. Water in the ground helps plants grow.', keywords: ['rivers', 'lakes', 'oceans', 'groundwater'] },
+    visuals: { action: 'visuals', original: 'Accumulation is water stored in rivers, lakes, oceans...', result: 'Added labeled water storage diagram.', visuals: ['Ocean', 'Lake & river', 'Groundwater arrows'] },
+    summarize: { action: 'summarize', original: 'Accumulation is water stored in rivers, lakes, oceans...', result: 'Key points about accumulation:', bullets: ['Water stored in rivers, lakes, oceans, soil', 'Oceans hold the most', 'Groundwater feeds plant roots'] },
   },
   evaporation: {
-    simplify: {
-      action: 'simplify',
-      original: 'Evaporation happens when the Sun heats up water and turns it into water vapour. Water vapour is a gas in the air. Water can be evaporated from plants. This is called transpiration.',
-      result: 'The Sun heats water and turns it into a gas called water vapour. Plants also release water into the air — that\'s called transpiration.',
-      keywords: ['Sun', 'heat', 'vapour', 'transpiration'],
-    },
-    visuals: {
-      action: 'visuals',
-      original: 'Evaporation happens when the Sun heats up water...',
-      result: 'Added evaporation process visuals.',
-      visuals: ['☀️ → 💧 → ☁️ Heat arrows', '🌿 Transpiration from leaves'],
-    },
-    summarize: {
-      action: 'summarize',
-      original: 'Evaporation happens when the Sun heats up water...',
-      result: 'Key points about evaporation:',
-      bullets: ['Sun heats water → becomes gas', 'Water vapour rises into air', 'Plants release water too (transpiration)'],
-    },
+    simplify: { action: 'simplify', original: 'Evaporation happens when the Sun heats up water and turns it into water vapour.', result: 'The Sun heats water and turns it into a gas called water vapour.', keywords: ['Sun', 'heat', 'vapour', 'transpiration'] },
+    visuals: { action: 'visuals', original: 'Evaporation happens when the Sun heats up water...', result: 'Added evaporation process visuals.', visuals: ['Heat arrows', 'Transpiration from leaves'] },
+    summarize: { action: 'summarize', original: 'Evaporation happens when the Sun heats up water...', result: 'Key points about evaporation:', bullets: ['Sun heats water to gas', 'Water vapour rises into air', 'Plants release water too (transpiration)'] },
   },
   condensation: {
-    simplify: {
-      action: 'simplify',
-      original: 'When water vapour is in the air, it cools and turns back to a liquid. This is called condensation. Water droplets in the air form clouds. But even on a clear day, there is always water in the air.',
-      result: 'Water vapour cools down and becomes liquid again. This makes clouds! There\'s always some water in the air.',
-      keywords: ['cool', 'liquid', 'clouds'],
-    },
-    visuals: {
-      action: 'visuals',
-      original: 'When water vapour is in the air, it cools...',
-      result: 'Added condensation diagram.',
-      visuals: ['☁️ Cloud formation stages', '💧 Droplet close-up'],
-    },
-    summarize: {
-      action: 'summarize',
-      original: 'When water vapour is in the air, it cools...',
-      result: 'Key points about condensation:',
-      bullets: ['Vapour cools → liquid', 'Forms clouds', 'Water always in air'],
-    },
+    simplify: { action: 'simplify', original: 'When water vapour is in the air, it cools and turns back to a liquid.', result: 'Water vapour cools down and becomes liquid again. This makes clouds!', keywords: ['cool', 'liquid', 'clouds'] },
+    visuals: { action: 'visuals', original: 'When water vapour is in the air, it cools...', result: 'Added condensation diagram.', visuals: ['Cloud formation stages', 'Droplet close-up'] },
+    summarize: { action: 'summarize', original: 'When water vapour is in the air, it cools...', result: 'Key points about condensation:', bullets: ['Vapour cools to liquid', 'Forms clouds', 'Water always in air'] },
   },
   precipitation: {
-    simplify: {
-      action: 'simplify',
-      original: 'When more water joins the clouds, they get heavy. The water falls back to Earth, which is called precipitation. Precipitation gives water to plants and animals. Precipitation can be: rain, hail, sleet, snow.',
-      result: 'Clouds get heavy with water and it falls down. This is called precipitation. It can be rain, hail, sleet, or snow!',
-      keywords: ['rain', 'hail', 'sleet', 'snow'],
-    },
-    visuals: {
-      action: 'visuals',
-      original: 'When more water joins the clouds, they get heavy...',
-      result: 'Added precipitation type illustrations.',
-      visuals: ['🌧️ Rain', '🌨️ Snow & hail', '🌿 Water reaching plants'],
-    },
-    summarize: {
-      action: 'summarize',
-      original: 'When more water joins the clouds, they get heavy...',
-      result: 'Key points about precipitation:',
-      bullets: ['Heavy clouds release water', '4 types: rain, hail, sleet, snow', 'Gives water to plants & animals'],
-    },
-  },
-  // Page 2 & 3 zones
-  q1: {
-    simplify: { action: 'simplify', original: 'Match each word to the correct definition: Precipitation, Evaporation, Accumulation, Condensation, Transpiration.', result: 'Draw a line from each water cycle word to what it means.', keywords: ['match', 'definition'] },
-    visuals: { action: 'visuals', original: 'Match each word to the correct definition...', result: 'Added colour-coded matching hints.', visuals: ['🔵 Word-to-definition colour lines'] },
-    summarize: { action: 'summarize', original: 'Match each word to the correct definition...', result: 'Matching exercise:', bullets: ['Precipitation → rain, snow, etc.', 'Evaporation → Sun heats water to gas', 'Accumulation → water stored in lakes/oceans', 'Condensation → vapour cools to liquid', 'Transpiration → water from plants'] },
-  },
-  q2: {
-    simplify: { action: 'simplify', original: 'Check the true statements about the water cycle.', result: 'Pick the sentences that are correct.', keywords: ['true', 'false'] },
-    visuals: { action: 'visuals', original: 'Check the true statements...', result: 'Added visual true/false markers.', visuals: ['✅ True statement highlights'] },
-    summarize: { action: 'summarize', original: 'Check the true statements...', result: 'True/false check:', bullets: ['Earth always has the same water ✓', 'Moon is important ✗', 'Oceans hold most water ✓'] },
-  },
-  q3: {
-    simplify: { action: 'simplify', original: 'List the four stages of the water cycle.', result: 'Name the 4 steps water goes through.', keywords: ['stages', 'cycle'] },
-    visuals: { action: 'visuals', original: 'List the four stages...', result: 'Added numbered cycle diagram.', visuals: ['🔄 4-step cycle diagram'] },
-    summarize: { action: 'summarize', original: 'List the four stages...', result: 'The 4 stages:', bullets: ['1. Accumulation', '2. Evaporation', '3. Condensation', '4. Precipitation'] },
-  },
-  q456: {
-    simplify: { action: 'simplify', original: 'Q4: What are clouds formed of? Q5: Explain evaporation. Q6: Why is precipitation important?', result: 'Q4: What makes clouds? Q5: How does water become gas? Q6: Why do plants and animals need rain?', keywords: ['clouds', 'evaporation', 'precipitation'] },
-    visuals: { action: 'visuals', original: 'Q4–Q6 short answer questions...', result: 'Added visual answer hints.', visuals: ['☁️ Cloud diagram for Q4', '☀️ → 💨 for Q5', '🌧️ → 🌿 for Q6'] },
-    summarize: { action: 'summarize', original: 'Q4–Q6 short answer questions...', result: 'Answer summaries:', bullets: ['Q4: Clouds = water droplets', 'Q5: Sun heats water → gas', 'Q6: Rain gives water to plants & animals'] },
-  },
-  q1_blank: {
-    simplify: { action: 'simplify', original: 'Match each word to the correct definition.', result: 'Draw a line from each word to its meaning.', keywords: ['match', 'definition'] },
-    visuals: { action: 'visuals', original: 'Match each word to the correct definition.', result: 'Added visual word bank with icons.', visuals: ['🏷️ Illustrated word cards'] },
-    summarize: { action: 'summarize', original: 'Match each word to the correct definition.', result: 'Hint:', bullets: ['Think about what happens at each step of the cycle'] },
-  },
-  q2_blank: {
-    simplify: { action: 'simplify', original: 'Check the true statements.', result: 'Read each sentence and check if it is true.', keywords: ['true', 'check'] },
-    visuals: { action: 'visuals', original: 'Check the true statements.', result: 'Added visual clue icons.', visuals: ['💡 Clue icons next to statements'] },
-    summarize: { action: 'summarize', original: 'Check the true statements.', result: 'Hint:', bullets: ['Remember: the Sun (not the Moon) drives the cycle'] },
-  },
-  q3_blank: {
-    simplify: { action: 'simplify', original: 'List the four stages of the water cycle.', result: 'Write the 4 steps water goes through.', keywords: ['four', 'stages'] },
-    visuals: { action: 'visuals', original: 'List the four stages...', result: 'Added cycle diagram with blanks.', visuals: ['🔄 Cycle with fill-in blanks'] },
-    summarize: { action: 'summarize', original: 'List the four stages...', result: 'Hint:', bullets: ['A → E → C → P'] },
-  },
-  q456_blank: {
-    simplify: { action: 'simplify', original: 'Q4: What are clouds formed of? Q5: Explain evaporation. Q6: Why is precipitation important?', result: 'Q4: What makes clouds? Q5: How does water turn into gas? Q6: Why is rain important?', keywords: ['clouds', 'evaporation', 'rain'] },
-    visuals: { action: 'visuals', original: 'Q4–Q6 short answer questions...', result: 'Added visual prompts.', visuals: ['☁️ Q4 hint', '☀️ Q5 hint', '🌧️ Q6 hint'] },
-    summarize: { action: 'summarize', original: 'Q4–Q6 short answer questions...', result: 'Hints:', bullets: ['Q4: Think about tiny water drops', 'Q5: What does the Sun do to water?', 'Q6: Who needs rain?'] },
+    simplify: { action: 'simplify', original: 'When more water joins the clouds, they get heavy. The water falls back to Earth.', result: 'Clouds get heavy with water and it falls down. This is called precipitation.', keywords: ['rain', 'hail', 'sleet', 'snow'] },
+    visuals: { action: 'visuals', original: 'When more water joins the clouds, they get heavy...', result: 'Added precipitation type illustrations.', visuals: ['Rain', 'Snow & hail', 'Water reaching plants'] },
+    summarize: { action: 'summarize', original: 'When more water joins the clouds, they get heavy...', result: 'Key points about precipitation:', bullets: ['Heavy clouds release water', '4 types: rain, hail, sleet, snow', 'Gives water to plants & animals'] },
   },
 };
+
+// ---------------------------------------------------------------------------
+// Helpers: convert DetectedBlock[] to Zone[]
+// ---------------------------------------------------------------------------
+function blocksToZones(blocks: DetectedBlock[]): Zone[] {
+  return blocks.map((b) => ({
+    id: b.blockId,
+    label: b.label,
+    rect: b.rect,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Helper: find which zone the selected OCR words overlap with most
+// ---------------------------------------------------------------------------
+function findZoneForSelection(
+  words: { bbox: { left: number; top: number; width: number; height: number } }[],
+  lo: number,
+  hi: number,
+  zones: Zone[],
+): string | null {
+  const slice = words.slice(lo, hi + 1);
+  if (slice.length === 0) return null;
+  let minL = Infinity, minT = Infinity, maxR = -Infinity, maxB = -Infinity;
+  for (const w of slice) {
+    minL = Math.min(minL, w.bbox.left * 100);
+    minT = Math.min(minT, w.bbox.top * 100);
+    maxR = Math.max(maxR, (w.bbox.left + w.bbox.width) * 100);
+    maxB = Math.max(maxB, (w.bbox.top + w.bbox.height) * 100);
+  }
+  let bestId: string | null = null;
+  let bestArea = 0;
+  for (const z of zones) {
+    const oL = Math.max(minL, z.rect.left);
+    const oT = Math.max(minT, z.rect.top);
+    const oR = Math.min(maxR, z.rect.left + z.rect.width);
+    const oB = Math.min(maxB, z.rect.top + z.rect.height);
+    if (oL < oR && oT < oB) {
+      const area = (oR - oL) * (oB - oT);
+      if (area > bestArea) { bestArea = area; bestId = z.id; }
+    }
+  }
+  return bestId;
+}
+
+// ---------------------------------------------------------------------------
+// Word overlay sub-component (real mode: OCR word-level selection)
+// ---------------------------------------------------------------------------
+function WordOverlay({
+  ocr,
+  range,
+  onWordPress,
+  onWordLongPress,
+}: {
+  ocr: OcrScanResponse;
+  range: { a: number; b: number } | null;
+  onWordPress: (i: number) => void;
+  onWordLongPress: (i: number) => void;
+}) {
+  const selected = (i: number) =>
+    range !== null && i >= Math.min(range.a, range.b) && i <= Math.max(range.a, range.b);
+
+  return (
+    <View style={[StyleSheet.absoluteFill, styles.wordLayer]} pointerEvents="box-none">
+      {ocr.words.map((w, i) => (
+        <Pressable
+          key={`w-${i}`}
+          hitSlop={spacing.innerGapSmall}
+          onPress={() => onWordPress(i)}
+          onLongPress={() => onWordLongPress(i)}
+          style={[
+            styles.wordHit,
+            {
+              left: `${w.bbox.left * 100}%`,
+              top: `${w.bbox.top * 100}%`,
+              width: `${w.bbox.width * 100}%`,
+              height: `${w.bbox.height * 100}%`,
+            },
+          ]}
+        >
+          {selected(i) ? (
+            <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.wordHighlight]} />
+          ) : null}
+        </Pressable>
+      ))}
+    </View>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Main screen
 // ---------------------------------------------------------------------------
 
-const IMAGE_ASPECT = 595 / 842;
+const DEMO_IMAGE_ASPECT = 595 / 842;
 
 export default function WorksheetViewScreen() {
   const navigation = useNavigation<Nav>();
+  const route = useRoute<Route>();
 
-  const [pageIndex, setPageIndex] = useState(0);
+  // Determine mode: real API vs demo
+  const params = route.params;
+  const isRealMode = !!params?.blocks;
+
+  // Build zones & image source from params or demo data
+  const zones: Zone[] = isRealMode
+    ? blocksToZones(params!.blocks)
+    : DEMO_PAGES[0].zones;
+
+  const imageSource = isRealMode
+    ? { uri: params!.imageUri }
+    : DEMO_PAGES[0].image;
+
+  const worksheetTitle = isRealMode ? 'Worksheet' : 'The Water Cycle';
+  const worksheetId = params?.worksheetId;
+
+  // Keep a lookup from blockId -> DetectedBlock for original text
+  const blockLookup = isRealMode
+    ? Object.fromEntries(params!.blocks.map((b) => [b.blockId, b]))
+    : null;
+
   const [selectedZone, setSelectedZone] = useState<string | null>(null);
-  const [currentAction, setCurrentAction] = useState<ToolbarAction>('simplify');
   const [showToolbar, setShowToolbar] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  // Store multiple adaptations per zone: zoneId -> { action -> Adaptation }
-  const [adaptedZones, setAdaptedZones] = useState<Record<string, Record<ToolbarAction, Adaptation>>>({});
+  const [adaptedZones, setAdaptedZones] = useState<Record<string, Partial<Record<ToolbarAction, Adaptation>>>>({});
+
+  // Track which marker opened the preview modal
+  const [previewMarkerId, setPreviewMarkerId] = useState<{ zoneId: string; action: ToolbarAction } | null>(null);
+
+  // Unmount guard for async callbacks
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  // ── Image sizing (nullable aspect prevents Infinity height crash) ──
+  const [imageAspect, setImageAspect] = useState<number | null>(isRealMode ? null : DEMO_IMAGE_ASPECT);
+  const [containerWidth, setContainerWidth] = useState(0);
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
 
-  // Preview modal state
-  const [showPreview, setShowPreview] = useState(false);
-  const [previewAdaptation, setPreviewAdaptation] = useState<Adaptation | null>(null);
+  useEffect(() => {
+    if (!isRealMode) { setImageAspect(DEMO_IMAGE_ASPECT); return; }
+    Image.getSize(
+      params!.imageUri,
+      (w, h) => setImageAspect(w > 0 && h > 0 ? w / h : DEMO_IMAGE_ASPECT),
+      () => setImageAspect(DEMO_IMAGE_ASPECT),
+    );
+  }, [isRealMode, params]);
 
-  const currentPage = PAGES[pageIndex];
-  const totalPages = PAGES.length;
-
-  const goToPage = (idx: number) => {
-    setSelectedZone(null);
-    setShowToolbar(false);
-    setPageIndex(idx);
+  const handleImageLayout = (e: LayoutChangeEvent) => {
+    setContainerWidth(e.nativeEvent.layout.width);
   };
 
+  useEffect(() => {
+    if (containerWidth > 0 && imageAspect != null && imageAspect > 0) {
+      setImageSize({ width: containerWidth, height: containerWidth / imageAspect });
+    }
+  }, [imageAspect, containerWidth]);
+
+  // Preview modal state — derived from previewMarkerId
+  const showPreview = previewMarkerId !== null;
+  const previewAdaptation = useMemo(() => {
+    if (!previewMarkerId) return null;
+    return adaptedZones[previewMarkerId.zoneId]?.[previewMarkerId.action] ?? null;
+  }, [previewMarkerId, adaptedZones]);
+
   const toolbarAnim = useRef(new Animated.Value(0)).current;
-  const toastAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.spring(toolbarAnim, {
@@ -305,155 +298,365 @@ export default function WorksheetViewScreen() {
     }).start();
   }, [showToolbar]);
 
-  const handleImageLayout = (e: LayoutChangeEvent) => {
-    const { width } = e.nativeEvent.layout;
-    setImageSize({ width, height: width / IMAGE_ASPECT });
-  };
+  // ── OCR state (real mode: scan for word-level selection) ──
+  const [ocrData, setOcrData] = useState<OcrScanResponse | null>(null);
+  const [ocrLoading, setOcrLoading] = useState(false);
+
+  useEffect(() => {
+    if (!isRealMode) return;
+    let cancelled = false;
+    setOcrLoading(true);
+    void (async () => {
+      const res = await scanImageOcr(params!.imageBase64);
+      if (cancelled) return;
+      if (res.ok) setOcrData(res.data);
+      setOcrLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [isRealMode, params]);
+
+  // ── Word selection (real mode only) ──
+  const [wordRange, setWordRange] = useState<{ a: number; b: number } | null>(null);
+
+  const selectedText = useMemo(() => {
+    if (!ocrData || !wordRange) return '';
+    const lo = Math.min(wordRange.a, wordRange.b);
+    const hi = Math.max(wordRange.a, wordRange.b);
+    return ocrData.words.slice(lo, hi + 1).map((w) => w.text).join(' ').trim();
+  }, [ocrData, wordRange]);
+
+  const handleWordPress = useCallback((i: number) => {
+    setWordRange((prev) => {
+      if (!prev) return { a: i, b: i };
+      return { a: Math.min(prev.a, prev.b, i), b: Math.max(prev.a, prev.b, i) };
+    });
+  }, []);
+
+  const handleWordLongPress = useCallback((i: number) => {
+    setWordRange({ a: i, b: i });
+  }, []);
+
+  const clearWordSelection = useCallback(() => {
+    setWordRange(null);
+    setSelectedZone(null);
+    setShowToolbar(false);
+  }, []);
+
+  // Auto-detect zone from word selection (real mode)
+  useEffect(() => {
+    if (!isRealMode || !ocrData || !wordRange) return;
+    const lo = Math.min(wordRange.a, wordRange.b);
+    const hi = Math.max(wordRange.a, wordRange.b);
+    const zoneId = findZoneForSelection(ocrData.words, lo, hi, zones);
+    if (zoneId) {
+      setSelectedZone(zoneId);
+      setShowToolbar(true);
+    } else if (zones.length > 0) {
+      // Fallback: use first zone if no overlap found
+      setSelectedZone(zones[0].id);
+      setShowToolbar(true);
+    }
+  }, [wordRange, ocrData, zones, isRealMode]);
 
   const handleZoneTap = (id: string) => {
     if (selectedZone === id) {
-      // Clicking same zone again - toggle toolbar
       setShowToolbar(!showToolbar);
     } else {
-      // Clicking different zone - always show toolbar
       setSelectedZone(id);
       setShowToolbar(true);
     }
   };
 
+  // ── Fire-and-forget adaptation request ──
+  const fireAdaptationRequest = useCallback((
+    zoneId: string,
+    action: ToolbarAction,
+    originalText: string,
+  ) => {
+    if (isRealMode) {
+      const actionToggles: Toggles = {
+        simplifyLevel: action === 'simplify' ? (params!.toggles.simplifyLevel ?? 'G1') : null,
+        visualSupport: action === 'visuals',
+        summarize: action === 'summarize',
+      };
+
+      processWorksheet({
+        imageBase64: params!.imageBase64,
+        toggles: actionToggles,
+        selectedBlockIds: [zoneId],
+        selectedBlockTexts: { [zoneId]: originalText },
+        options: { summaryMaxSentences: 5, language: 'en' },
+      }).then((result) => {
+        if (!mountedRef.current) return;
+
+        if (result.ok === false) {
+          // Error: remove the loading marker (re-enable button)
+          setAdaptedZones((prev) => {
+            const zoneAdapts = { ...(prev[zoneId] || {}) };
+            delete zoneAdapts[action];
+            if (Object.keys(zoneAdapts).length === 0) {
+              const { [zoneId]: _, ...rest } = prev;
+              return rest;
+            }
+            return { ...prev, [zoneId]: zoneAdapts };
+          });
+          const msg = result.error.message;
+          if (Platform.OS === 'web') {
+            window.alert('Adaptation Failed\n' + msg);
+          } else {
+            Alert.alert('Adaptation Failed', msg, [{ text: 'OK' }]);
+          }
+          return;
+        }
+
+        // Success: update marker to "ready"
+        const block = result.data.blocks.find((b) => b.blockId === zoneId);
+        const summary = result.data.summary;
+
+        let readyData: Partial<Adaptation> = {};
+        if (action === 'simplify' && block) {
+          readyData = {
+            result: block.simplifiedText ?? originalText,
+            keywords: block.keywords,
+            visualUrl: block.visualUrl ?? undefined,
+          };
+        } else if (action === 'visuals' && block) {
+          readyData = {
+            result: block.visualHint ?? 'Visual support added.',
+            visuals: block.visualHint ? [block.visualHint] : [],
+            visualUrl: block.visualUrl ?? undefined,
+          };
+        } else if (action === 'summarize' && summary) {
+          readyData = {
+            result: 'Summary:',
+            bullets: summary.sentences,
+          };
+        }
+
+        setAdaptedZones((prev) => ({
+          ...prev,
+          [zoneId]: {
+            ...(prev[zoneId] || {}),
+            [action]: {
+              ...(prev[zoneId]?.[action]),
+              ...readyData,
+              state: 'ready',
+            },
+          },
+        }));
+      }).catch((err) => {
+        if (!mountedRef.current) return;
+        // Error: remove the loading marker
+        setAdaptedZones((prev) => {
+          const zoneAdapts = { ...(prev[zoneId] || {}) };
+          delete zoneAdapts[action];
+          if (Object.keys(zoneAdapts).length === 0) {
+            const { [zoneId]: _, ...rest } = prev;
+            return rest;
+          }
+          return { ...prev, [zoneId]: zoneAdapts };
+        });
+        const msg = err instanceof Error ? err.message : 'An unexpected error occurred.';
+        if (Platform.OS === 'web') {
+          window.alert('Error\n' + msg);
+        } else {
+          Alert.alert('Error', msg, [{ text: 'OK' }]);
+        }
+      });
+    } else {
+      // Demo mode: simulate delay then mark ready
+      const delay = 1400 + Math.random() * 1000;
+      setTimeout(() => {
+        if (!mountedRef.current) return;
+        const demoResult = DEMO_RESULTS[zoneId]?.[action];
+        if (demoResult) {
+          setAdaptedZones((prev) => ({
+            ...prev,
+            [zoneId]: {
+              ...(prev[zoneId] || {}),
+              [action]: { ...demoResult, state: 'ready' },
+            },
+          }));
+        } else {
+          // No demo data: remove marker
+          setAdaptedZones((prev) => {
+            const zoneAdapts = { ...(prev[zoneId] || {}) };
+            delete zoneAdapts[action];
+            if (Object.keys(zoneAdapts).length === 0) {
+              const { [zoneId]: _, ...rest } = prev;
+              return rest;
+            }
+            return { ...prev, [zoneId]: zoneAdapts };
+          });
+        }
+      }, delay);
+    }
+  }, [isRealMode, params]);
+
   const handleAction = (action: ToolbarAction) => {
-    setCurrentAction(action);
+    if (!selectedZone) return;
+
+    // Capture text before closing toolbar
+    const originalText = isRealMode
+      ? (selectedText || (blockLookup?.[selectedZone]?.originalText ?? ''))
+      : (DEMO_RESULTS[selectedZone]?.[action]?.original ?? '');
+
+    // Immediately create a loading adaptation
+    setAdaptedZones((prev) => ({
+      ...prev,
+      [selectedZone]: {
+        ...(prev[selectedZone] || {}),
+        [action]: {
+          action,
+          state: 'loading',
+          original: originalText,
+          result: '',
+        } as Adaptation,
+      },
+    }));
+
+    // Hide toolbar and clear word highlight so it doesn't block next selection
     setShowToolbar(false);
-    setIsProcessing(true);
+    setWordRange(null);
 
-    const result =
-      selectedZone && MOCK_RESULTS[selectedZone]
-        ? MOCK_RESULTS[selectedZone][action]
-        : null;
-
-    Animated.sequence([
-      Animated.timing(toastAnim, { toValue: 1, duration: 200, useNativeDriver: true }),
-      Animated.delay(1200),
-      Animated.timing(toastAnim, { toValue: 0, duration: 200, useNativeDriver: true }),
-    ]).start(() => {
-      setIsProcessing(false);
-      if (result) {
-        // Show preview modal instead of directly applying
-        setPreviewAdaptation(result);
-        setShowPreview(true);
-      }
-    });
+    // Fire async request (no await)
+    fireAdaptationRequest(selectedZone, action, originalText);
   };
 
+  // ── Marker press handler (opens preview for "ready" markers) ──
+  const handleMarkerPress = useCallback((marker: MarkerData) => {
+    if (marker.state !== 'ready') return;
+    // Parse zoneId and action from marker id ("zoneId-action")
+    const lastDash = marker.id.lastIndexOf('-');
+    const zoneId = marker.id.slice(0, lastDash);
+    const action = marker.id.slice(lastDash + 1) as ToolbarAction;
+    setPreviewMarkerId({ zoneId, action });
+  }, []);
+
   const handleApplyAdaptation = () => {
-    if (selectedZone && previewAdaptation) {
-      setAdaptedZones((prev) => ({
-        ...prev,
-        [selectedZone]: {
-          ...(prev[selectedZone] || {}),
-          [currentAction]: previewAdaptation,
+    if (!previewMarkerId) return;
+    const { zoneId, action } = previewMarkerId;
+    // Mark as reviewed
+    setAdaptedZones((prev) => ({
+      ...prev,
+      [zoneId]: {
+        ...(prev[zoneId] || {}),
+        [action]: {
+          ...(prev[zoneId]?.[action]),
+          state: 'reviewed',
         },
-      }));
+      },
+    }));
+    setPreviewMarkerId(null);
+    if (isRealMode) {
+      clearWordSelection();
     }
-    setShowPreview(false);
-    setPreviewAdaptation(null);
-    setShowToolbar(true);
   };
 
   const handleRegenerateAdaptation = () => {
-    // In a real app, this would call the API again
-    // For now, just close and show the toolbar again
-    setShowPreview(false);
-    setPreviewAdaptation(null);
-    setShowToolbar(true);
-    // Optionally: trigger handleAction again to "regenerate"
+    if (!previewMarkerId) return;
+    const { zoneId, action } = previewMarkerId;
+    const existing = adaptedZones[zoneId]?.[action];
+    const originalText = existing?.original ?? '';
+
+    // Reset to loading
+    setAdaptedZones((prev) => ({
+      ...prev,
+      [zoneId]: {
+        ...(prev[zoneId] || {}),
+        [action]: {
+          action,
+          state: 'loading',
+          original: originalText,
+          result: '',
+        } as Adaptation,
+      },
+    }));
+    setPreviewMarkerId(null);
+
+    // Re-fire API
+    fireAdaptationRequest(zoneId, action, originalText);
   };
 
   const handleCancelPreview = () => {
-    setShowPreview(false);
-    setPreviewAdaptation(null);
-    setShowToolbar(true);
+    setPreviewMarkerId(null);
   };
 
-  // Convert adaptedZones to markers - create one marker per zone per action
+  // ── Helper: get adaptation state for a zone+action ──
+  const getAdaptState = (zoneId: string, action: ToolbarAction): Adaptation['state'] | null => {
+    return adaptedZones[zoneId]?.[action]?.state ?? null;
+  };
+
+  // ── Toolbar button disabled logic ──
+  const isButtonDisabled = (action: ToolbarAction): boolean => {
+    if (!selectedZone) return true;
+    const state = getAdaptState(selectedZone, action);
+    // Disabled for any non-null state (loading, ready, reviewed) — only error re-enables
+    return state !== null;
+  };
+
+  // ── Toolbar button status icon ──
+  const renderButtonStatus = (action: ToolbarAction) => {
+    if (!selectedZone) return null;
+    const state = getAdaptState(selectedZone, action);
+    if (state === 'loading') return <ActivityIndicator size={14} color={colors.surface} />;
+    if (state === 'ready') return <Ionicons name="alert-circle" size={16} color={colors.markerNotification} />;
+    if (state === 'reviewed') return <Ionicons name="checkmark-circle" size={16} color={colors.surface} />;
+    return null;
+  };
+
+  // ── Count markers by state for "Hand to Student" gating ──
+  const stateCounts = useMemo(() => {
+    let loading = 0;
+    let ready = 0;
+    let reviewed = 0;
+    Object.values(adaptedZones).forEach((actions) => {
+      Object.values(actions).forEach((a) => {
+        if (!a) return;
+        if (a.state === 'loading') loading++;
+        else if (a.state === 'ready') ready++;
+        else if (a.state === 'reviewed') reviewed++;
+      });
+    });
+    return { loading, ready, reviewed };
+  }, [adaptedZones]);
+
+  // Convert adaptedZones to markers — filter out error, set content null for loading
   const markers: MarkerData[] = Object.entries(adaptedZones)
     .flatMap(([zoneId, adaptations]) => {
-      const zone = currentPage.zones.find((z) => z.id === zoneId);
+      const zone = zones.find((z) => z.id === zoneId);
       if (!zone) return [];
 
-      // Create a marker for each adaptation type
-      return Object.values(adaptations).map((adaptation, index) => ({
-        id: `${zoneId}-${adaptation.action}`,
-        type: adaptation.action,
-        label: zone.label,
-        position: {
-          // Offset markers slightly if multiple adaptations exist
-          x: zone.rect.left + zone.rect.width / 2 + (index * 3),
-          y: zone.rect.top + zone.rect.height / 2 + (index * 3),
-        },
-        content: {
-          original: adaptation.original,
-          result: adaptation.result,
-          keywords: adaptation.keywords,
-          bullets: adaptation.bullets,
-          visuals: adaptation.visuals,
-        },
-      }));
+      return Object.values(adaptations)
+        .filter((a): a is Adaptation => a != null && a.state !== 'error')
+        .map((adaptation, index) => ({
+          id: `${zoneId}-${adaptation.action}`,
+          type: adaptation.action,
+          label: zone.label,
+          state: adaptation.state as MarkerData['state'],
+          position: {
+            x: zone.rect.left + zone.rect.width / 2 + (index * 3),
+            y: zone.rect.top + zone.rect.height / 2 + (index * 3),
+          },
+          content: adaptation.state === 'loading'
+            ? null
+            : {
+                original: adaptation.original,
+                result: adaptation.result,
+                keywords: adaptation.keywords,
+                bullets: adaptation.bullets,
+                visuals: adaptation.visuals,
+                visualUrl: adaptation.visualUrl,
+              },
+        }));
     });
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScreenHeader title="The Water Cycle" />
+      <ScreenHeader title={worksheetTitle} />
 
       <View style={styles.content}>
-        {/* Main worksheet area */}
         <View style={styles.worksheetArea}>
-          {/* Page navigation bar */}
-          <View style={styles.pageNav}>
-            <Pressable
-              onPress={() => goToPage(pageIndex - 1)}
-              style={[styles.pageNavBtn, pageIndex === 0 && styles.pageNavBtnDisabled]}
-              disabled={pageIndex === 0}
-            >
-              <Ionicons
-                name="chevron-back"
-                size={18}
-                color={pageIndex === 0 ? colors.surfaceMuted : colors.textSecondary}
-              />
-            </Pressable>
-
-            <View style={styles.pageIndicator}>
-              {PAGES.map((_p, i) => (
-                <Pressable key={i} onPress={() => goToPage(i)} style={styles.pageDotWrap}>
-                  <View style={[styles.pageDot, i === pageIndex && styles.pageDotActive]} />
-                  {i < PAGES.length - 1 && (
-                    <View style={[styles.pageDash, i < pageIndex && styles.pageDashDone]} />
-                  )}
-                </Pressable>
-              ))}
-              <Text style={styles.pageLabel}>{pageIndex + 1} / {totalPages}</Text>
-            </View>
-
-            <Pressable
-              onPress={() => goToPage(pageIndex + 1)}
-              style={[
-                styles.pageNavBtn,
-                pageIndex === totalPages - 1 && styles.pageNavBtnDisabled,
-              ]}
-              disabled={pageIndex === totalPages - 1}
-            >
-              <Ionicons
-                name="chevron-forward"
-                size={18}
-                color={
-                  pageIndex === totalPages - 1
-                    ? colors.surfaceMuted
-                    : colors.textSecondary
-                }
-              />
-            </Pressable>
-          </View>
-
           <ScrollView
             style={styles.worksheetScroll}
             contentContainerStyle={styles.worksheetScrollContent}
@@ -461,7 +664,7 @@ export default function WorksheetViewScreen() {
           >
             <View style={styles.imageWrapper} onLayout={handleImageLayout}>
               <Image
-                source={currentPage.image}
+                source={imageSource}
                 style={[
                   styles.worksheetImage,
                   imageSize.height > 0 && { height: imageSize.height },
@@ -469,11 +672,28 @@ export default function WorksheetViewScreen() {
                 resizeMode="contain"
               />
 
-              {/* Tappable overlay zones */}
-              {imageSize.width > 0 &&
-                currentPage.zones.map((zone) => {
+              {/* Real mode: OCR word overlay for text selection */}
+              {isRealMode && imageSize.width > 0 && ocrData && ocrData.words.length > 0 && (
+                <WordOverlay
+                  ocr={ocrData}
+                  range={wordRange}
+                  onWordPress={handleWordPress}
+                  onWordLongPress={handleWordLongPress}
+                />
+              )}
+
+              {/* Real mode: OCR loading badge */}
+              {isRealMode && ocrLoading && (
+                <View style={styles.ocrLoadingOverlay} pointerEvents="none">
+                  <ActivityIndicator size="small" color={colors.primary} />
+                  <Text style={styles.ocrLoadingText}>Loading text\u2026</Text>
+                </View>
+              )}
+
+              {/* Demo mode: tappable overlay zones */}
+              {!isRealMode && imageSize.width > 0 &&
+                zones.map((zone) => {
                   const isSelected = selectedZone === zone.id;
-                  const isAdapted = !!adaptedZones[zone.id];
                   return (
                     <Pressable
                       key={zone.id}
@@ -500,6 +720,7 @@ export default function WorksheetViewScreen() {
                     marker={marker}
                     worksheetWidth={imageSize.width}
                     worksheetHeight={imageSize.height}
+                    onPress={handleMarkerPress}
                   />
                 ))}
             </View>
@@ -521,63 +742,62 @@ export default function WorksheetViewScreen() {
         ]}
         pointerEvents={showToolbar ? 'auto' : 'none'}
       >
+        {isRealMode && wordRange && (
+          <>
+            <Pressable style={styles.actionToolbarItem} onPress={clearWordSelection}>
+              <Ionicons name="close" size={18} color={colors.surface} />
+              <Text style={styles.actionToolbarLabel}>Clear</Text>
+            </Pressable>
+            <View style={styles.actionToolbarDivider} />
+          </>
+        )}
         <Pressable
           style={[
             styles.actionToolbarItem,
-            selectedZone && adaptedZones[selectedZone]?.simplify && styles.actionToolbarItemDisabled
+            isButtonDisabled('simplify') && styles.actionToolbarItemDisabled,
           ]}
           onPress={() => handleAction('simplify')}
-          disabled={!!(selectedZone && adaptedZones[selectedZone]?.simplify)}
+          disabled={isButtonDisabled('simplify')}
         >
           <Ionicons name="text" size={20} color={colors.surface} />
           <Text style={styles.actionToolbarLabel}>Simplify</Text>
-          {selectedZone && adaptedZones[selectedZone]?.simplify && (
-            <Ionicons name="checkmark-circle" size={16} color={colors.surface} />
-          )}
+          {renderButtonStatus('simplify')}
         </Pressable>
         <View style={styles.actionToolbarDivider} />
         <Pressable
           style={[
             styles.actionToolbarItem,
-            selectedZone && adaptedZones[selectedZone]?.visuals && styles.actionToolbarItemDisabled
+            isButtonDisabled('visuals') && styles.actionToolbarItemDisabled,
           ]}
           onPress={() => handleAction('visuals')}
-          disabled={!!(selectedZone && adaptedZones[selectedZone]?.visuals)}
+          disabled={isButtonDisabled('visuals')}
         >
           <Ionicons name="image" size={20} color={colors.surface} />
           <Text style={styles.actionToolbarLabel}>Add Visuals</Text>
-          {selectedZone && adaptedZones[selectedZone]?.visuals && (
-            <Ionicons name="checkmark-circle" size={16} color={colors.surface} />
-          )}
+          {renderButtonStatus('visuals')}
         </Pressable>
         <View style={styles.actionToolbarDivider} />
         <Pressable
           style={[
             styles.actionToolbarItem,
-            selectedZone && adaptedZones[selectedZone]?.summarize && styles.actionToolbarItemDisabled
+            isButtonDisabled('summarize') && styles.actionToolbarItemDisabled,
           ]}
           onPress={() => handleAction('summarize')}
-          disabled={!!(selectedZone && adaptedZones[selectedZone]?.summarize)}
+          disabled={isButtonDisabled('summarize')}
         >
           <Ionicons name="list" size={20} color={colors.surface} />
           <Text style={styles.actionToolbarLabel}>Summarize</Text>
-          {selectedZone && adaptedZones[selectedZone]?.summarize && (
-            <Ionicons name="checkmark-circle" size={16} color={colors.surface} />
-          )}
+          {renderButtonStatus('summarize')}
         </Pressable>
-      </Animated.View>
-
-      {/* Processing toast */}
-      <Animated.View style={[styles.toast, { opacity: toastAnim }]} pointerEvents="none">
-        <Ionicons name="hourglass" size={16} color={colors.surface} />
-        <Text style={styles.toastText}>{ACTION_META[currentAction].toastText}</Text>
       </Animated.View>
 
       {/* Bottom hint bar */}
       <View style={styles.hintBar}>
         <Ionicons name="finger-print" size={16} color={colors.textSecondary} />
         <Text style={styles.hintText}>
-          Tap zones to adapt • Tap markers to view details
+          {isRealMode
+            ? 'Tap words to select \u2022 Long-press to restart \u2022 Pick an action'
+            : 'Tap zones to adapt \u2022 Tap markers to view details'}
         </Text>
       </View>
 
@@ -585,33 +805,80 @@ export default function WorksheetViewScreen() {
       <Pressable
         style={styles.fab}
         onPress={() => {
-          // Check if there are any adaptations
           if (Object.keys(adaptedZones).length === 0) {
-            alert('Please adapt at least one section before handing to student.');
+            if (Platform.OS === 'web') {
+              window.alert('Please adapt at least one section before handing to student.');
+            } else {
+              Alert.alert('No Adaptations', 'Please adapt at least one section before handing to student.', [{ text: 'OK' }]);
+            }
+            return;
+          }
+
+          // Gate: still processing
+          if (stateCounts.loading > 0) {
+            const msg = `${stateCounts.loading} adaptation${stateCounts.loading > 1 ? 's are' : ' is'} still processing. Please wait.`;
+            if (Platform.OS === 'web') {
+              window.alert(msg);
+            } else {
+              Alert.alert('Still Processing', msg, [{ text: 'OK' }]);
+            }
+            return;
+          }
+
+          // Gate: needs review
+          if (stateCounts.ready > 0) {
+            const msg = `${stateCounts.ready} adaptation${stateCounts.ready > 1 ? 's need' : ' needs'} review. Tap the notification dots on markers to review.`;
+            if (Platform.OS === 'web') {
+              window.alert(msg);
+            } else {
+              Alert.alert('Review Needed', msg, [{ text: 'OK' }]);
+            }
             return;
           }
 
           const zoneLabelMap: Record<string, string> = {};
-          PAGES.forEach((p) => p.zones.forEach((z) => { zoneLabelMap[z.id] = z.label; }));
+          zones.forEach((z) => { zoneLabelMap[z.id] = z.label; });
 
           const adapted: AdaptedZone[] = Object.entries(adaptedZones).flatMap(
-            ([zoneId, adaptations]) =>
-              Object.values(adaptations).map((adapt) => ({
-                zoneId,
-                zoneLabel: zoneLabelMap[zoneId] ?? zoneId,
-                action: adapt.action,
-                original: adapt.original,
-                result: adapt.result,
-                keywords: adapt.keywords,
-                bullets: adapt.bullets,
-                visuals: adapt.visuals,
-              })),
+            ([zoneId, adaptations]) => {
+              const zone = zones.find((z) => z.id === zoneId);
+              return Object.values(adaptations)
+                .filter((a): a is Adaptation => a != null && a.state === 'reviewed')
+                .map((adapt) => ({
+                  zoneId,
+                  zoneLabel: zoneLabelMap[zoneId] ?? zoneId,
+                  action: adapt.action,
+                  original: adapt.original,
+                  result: adapt.result,
+                  keywords: adapt.keywords,
+                  bullets: adapt.bullets,
+                  visuals: adapt.visuals,
+                  visualUrl: adapt.visualUrl,
+                  rect: zone?.rect,
+                }));
+            },
           );
 
-          navigation.navigate('StudentView', {
-            title: 'The Water Cycle',
+          // Persist session so HomeScreen can resume later
+          if (worksheetId) {
+            saveSession({
+              worksheetId,
+              updatedAt: Date.now(),
+              title: worksheetTitle,
+              imageUri: params?.imageUri,
+              adaptations: adapted,
+              drawingData: { paths: [], shapes: [], texts: [] },
+            });
+          }
+
+          // Store large data (base64 visualUrls) outside nav params to avoid serialisation crash
+          setStudentViewData({
+            title: worksheetTitle,
             adaptations: adapted,
+            imageUri: isRealMode ? params!.imageUri : undefined,
+            worksheetId,
           });
+          navigation.navigate('StudentView');
         }}
       >
         <Ionicons name="school" size={20} color={colors.surface} />
@@ -622,8 +889,8 @@ export default function WorksheetViewScreen() {
       <AdaptationPreviewModal
         visible={showPreview}
         zoneLabel={
-          selectedZone
-            ? currentPage.zones.find((z) => z.id === selectedZone)?.label ?? selectedZone
+          previewMarkerId
+            ? zones.find((z) => z.id === previewMarkerId.zoneId)?.label ?? previewMarkerId.zoneId
             : ''
         }
         adaptation={previewAdaptation}
@@ -647,58 +914,6 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: spacing.pagePadding,
   },
-  // Page navigation
-  pageNav: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: spacing.innerGapSmall,
-    gap: spacing.innerGap,
-  },
-  pageNavBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: radii.circle,
-    backgroundColor: colors.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pageNavBtnDisabled: {
-    opacity: 0.4,
-  },
-  pageIndicator: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 0,
-  },
-  pageDotWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  pageDot: {
-    width: 10,
-    height: 10,
-    borderRadius: radii.circle,
-    backgroundColor: colors.surfaceMuted,
-  },
-  pageDotActive: {
-    backgroundColor: colors.primary,
-    width: 12,
-    height: 12,
-  },
-  pageDash: {
-    width: 24,
-    height: 2,
-    backgroundColor: colors.surfaceMuted,
-  },
-  pageDashDone: {
-    backgroundColor: colors.primary,
-  },
-  pageLabel: {
-    ...typography.caption,
-    color: colors.textSecondary,
-    marginLeft: spacing.innerGapSmall,
-  },
 
   worksheetScroll: { flex: 1 },
   worksheetScrollContent: { paddingBottom: 100 },
@@ -708,7 +923,29 @@ const styles = StyleSheet.create({
     borderRadius: radii.chip,
   },
 
-  // Overlay zones
+  // OCR word overlays (real mode)
+  wordLayer: { zIndex: 2 },
+  wordHit: { position: 'absolute' },
+  wordHighlight: {
+    backgroundColor: colors.selectionHighlight,
+    opacity: 0.42,
+  },
+  ocrLoadingOverlay: {
+    position: 'absolute',
+    top: spacing.innerGapSmall,
+    right: spacing.innerGapSmall,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.innerGapSmall,
+    backgroundColor: colors.surface,
+    borderRadius: radii.chip,
+    paddingHorizontal: spacing.innerGapSmall,
+    paddingVertical: 2,
+    opacity: 0.85,
+  },
+  ocrLoadingText: { ...typography.caption, color: colors.textSecondary },
+
+  // Overlay zones (demo mode)
   zone: {
     position: 'absolute',
     borderRadius: radii.chip,
@@ -745,22 +982,6 @@ const styles = StyleSheet.create({
   },
   actionToolbarLabel: { ...typography.bodySmall, color: colors.surface },
   actionToolbarDivider: { width: 1, height: 20, backgroundColor: '#FFFFFF33' },
-
-  // Toast
-  toast: {
-    position: 'absolute',
-    top: 80,
-    alignSelf: 'center',
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.toolbarBg,
-    borderRadius: radii.circle,
-    paddingHorizontal: spacing.pagePadding,
-    paddingVertical: spacing.innerGapSmall,
-    gap: spacing.innerGapSmall,
-    ...shadows.floatingToolbar,
-  },
-  toastText: { ...typography.bodySmall, color: colors.surface },
 
   // Hint bar
   hintBar: {

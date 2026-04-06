@@ -10,8 +10,13 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@google-cloud/vision": "^5.3.5",
+    "@trellis/shared": "*",
     "cors": "^2.8.5",
-    "express": "^4.21.0"
+    "dotenv": "^17.3.1",
+    "express": "^4.21.0",
+    "openai": "^6.29.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

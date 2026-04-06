@@ -9,3 +9,5 @@ document/
 worksheets/
 
 .claude/
+
+.env.example

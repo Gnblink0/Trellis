@@ -14,9 +14,9 @@ const ACTION_META: Record<
   AdaptationSummary['action'],
   { label: string; icon: keyof typeof Ionicons.glyphMap; color: string }
 > = {
-  simplify: { label: 'Simplified', icon: 'text', color: colors.primary },
-  visuals: { label: 'Visuals', icon: 'image', color: '#E67E22' },
-  summarize: { label: 'Summary', icon: 'list', color: '#8E44AD' },
+  simplify: { label: 'Simplified', icon: 'text', color: colors.actionSimplify },
+  visuals: { label: 'Visuals', icon: 'image', color: colors.actionVisuals },
+  summarize: { label: 'Summary', icon: 'list', color: colors.actionSummarize },
 };
 
 export default function ExportScreen() {

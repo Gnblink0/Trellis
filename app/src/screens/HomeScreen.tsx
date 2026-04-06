@@ -1,15 +1,55 @@
-import { View, Text, StyleSheet, Pressable, ScrollView } from 'react-native';
+import { useCallback, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, ScrollView, Image, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, typography, spacing, radii } from '../theme';
+import { colors, typography, spacing, radii, shadows } from '../theme';
 import { RootStackParamList } from '../navigation/types';
+import {
+  getRecentWorksheets,
+  type RecentWorksheet,
+} from '../services/recentWorksheets';
+import { hasSession, loadSession } from '../services/worksheetSessionStore';
+import { setStudentViewData } from '../services/studentViewStore';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Home'>;
 
+function formatRelativeTime(ts: number): string {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return 'Just now';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} hr${h === 1 ? '' : 's'} ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d} day${d === 1 ? '' : 's'} ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
 export default function HomeScreen() {
   const navigation = useNavigation<Nav>();
+  const [recents, setRecents] = useState<RecentWorksheet[]>([]);
+  const [sessionIds, setSessionIds] = useState<Set<string>>(new Set());
+
+  const loadRecents = useCallback(() => {
+    void getRecentWorksheets().then((items) => {
+      setRecents(items);
+      // Check which worksheets have persisted sessions
+      void Promise.all(items.map((w) => hasSession(w.id).then((has) => (has ? w.id : null))))
+        .then((ids) => setSessionIds(new Set(ids.filter((id): id is string => id !== null))));
+    });
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadRecents();
+    }, [loadRecents])
+  );
+
+  const openWorksheetCapture = () => {
+    navigation.navigate('WorksheetCapture');
+  };
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -26,64 +66,99 @@ export default function HomeScreen() {
           <Text style={styles.appName}>Trellis</Text>
         </View>
 
-        {/* Hero */}
-        <View style={styles.hero}>
-          <Text style={styles.heroTitle}>Snap a Worksheet</Text>
-          <Text style={styles.heroSubtitle}>
-            Take a photo of any worksheet or textbook page to create an adapted
-            version in seconds.
-          </Text>
-        </View>
-
-        {/* Camera CTA */}
-        <Pressable
-          style={styles.cameraCta}
-          onPress={() => navigation.navigate('WorksheetView')}
-        >
-          <View style={styles.cameraIconCircle}>
-            <Ionicons name="camera" size={32} color={colors.surface} />
+        {/* Hero + CTA */}
+        <Pressable style={styles.heroCta} onPress={openWorksheetCapture}>
+          <View style={styles.heroCtaIcon}>
+            <Ionicons name="add" size={32} color={colors.surface} />
           </View>
-          <Text style={styles.cameraLabel}>Tap to take a photo</Text>
+          <Text style={styles.heroCtaTitle}>New Worksheet</Text>
+          <Text style={styles.heroCtaSubtitle}>
+            Take photos or choose from library
+          </Text>
         </Pressable>
 
         {/* Recent Worksheets */}
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Recent Worksheets</Text>
-          <View style={styles.recentList}>
-            {MOCK_RECENT.map((item) => (
-              <Pressable key={item.id} style={styles.recentCard}>
-                <View style={styles.thumbnail}>
+          {recents.length === 0 ? (
+            <Text style={styles.recentEmpty}>
+              {Platform.OS === 'web'
+                ? 'Recent worksheets are saved when you use the app on a device.'
+                : 'Your uploaded worksheets will show up here.'}
+            </Text>
+          ) : (
+            <View style={styles.recentList}>
+              {recents.map((item) => {
+                const hasStoredSession = sessionIds.has(item.id);
+                return (
+                <Pressable
+                  key={item.id}
+                  style={styles.recentCard}
+                  onPress={async () => {
+                    if (hasStoredSession) {
+                      const session = await loadSession(item.id);
+                      if (session) {
+                        setStudentViewData({
+                          title: session.title,
+                          adaptations: session.adaptations,
+                          imageUri: session.imageUri,
+                          worksheetId: session.worksheetId,
+                        });
+                        navigation.navigate('StudentView');
+                        return;
+                      }
+                    }
+                    navigation.navigate('Process', {
+                      imageUri: item.imageUri,
+                    });
+                  }}
+                >
+                  <View style={styles.thumbnail}>
+                    {Platform.OS === 'web' ? (
+                      <Ionicons
+                        name="document-text"
+                        size={24}
+                        color={colors.textSecondary}
+                      />
+                    ) : (
+                      <Image
+                        source={{ uri: item.imageUri }}
+                        style={styles.thumbnailImage}
+                        resizeMode="cover"
+                      />
+                    )}
+                  </View>
+                  <View style={styles.recentInfo}>
+                    <View style={styles.recentTitleRow}>
+                      <Text style={styles.recentTitle} numberOfLines={1}>
+                        {item.title}
+                      </Text>
+                      {hasStoredSession && (
+                        <View style={styles.resumeBadge}>
+                          <Ionicons name="play-circle" size={14} color={colors.primary} />
+                          <Text style={styles.resumeBadgeText}>Resume</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={styles.recentMeta}>
+                      {formatRelativeTime(item.createdAt)}
+                    </Text>
+                  </View>
                   <Ionicons
-                    name="document-text"
-                    size={24}
+                    name="chevron-forward"
+                    size={20}
                     color={colors.textSecondary}
                   />
-                </View>
-                <View style={styles.recentInfo}>
-                  <Text style={styles.recentTitle} numberOfLines={1}>
-                    {item.title}
-                  </Text>
-                  <Text style={styles.recentMeta}>{item.meta}</Text>
-                </View>
-                <Ionicons
-                  name="chevron-forward"
-                  size={20}
-                  color={colors.textSecondary}
-                />
-              </Pressable>
-            ))}
-          </View>
+                </Pressable>
+                );
+              })}
+            </View>
+          )}
         </View>
       </ScrollView>
     </SafeAreaView>
   );
 }
-
-const MOCK_RECENT = [
-  { id: '1', title: 'Parts of a Plant', meta: 'Gr. 2 · Adapted 2 hrs ago' },
-  { id: '2', title: 'Water Cycle', meta: 'Gr. 3 · Adapted yesterday' },
-  { id: '3', title: 'Solar System', meta: 'Gr. 4 · Adapted 3 days ago' },
-];
 
 const styles = StyleSheet.create({
   safe: {
@@ -102,9 +177,9 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 8,
-    paddingBottom: 16,
-    gap: 12,
+    paddingTop: spacing.innerGapSmall,
+    paddingBottom: spacing.innerGap,
+    gap: spacing.innerGapSmall,
   },
   logoBox: {
     width: 44,
@@ -119,47 +194,34 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
 
-  // Hero
-  hero: {
-    alignItems: 'center',
-    paddingTop: spacing.sectionGapTop,
-    paddingBottom: spacing.sectionGapBottom,
-    gap: 16,
-  },
-  heroTitle: {
-    ...typography.display,
-    color: colors.textPrimary,
-    textAlign: 'center',
-  },
-  heroSubtitle: {
-    ...typography.body,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    maxWidth: 480,
-  },
-
-  // Camera CTA
-  cameraCta: {
+  // Hero CTA
+  heroCta: {
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: colors.surface,
     borderRadius: radii.answerCard,
-    height: 200,
+    paddingVertical: spacing.sectionGapTop,
     gap: spacing.innerGapSmall,
     borderWidth: 2,
     borderColor: colors.surfaceMuted,
     borderStyle: 'dashed',
   },
-  cameraIconCircle: {
-    width: 64,
-    height: 64,
+  heroCtaIcon: {
+    width: 56,
+    height: 56,
     borderRadius: radii.circle,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
+    ...shadows.fab,
   },
-  cameraLabel: {
-    ...typography.bodySmall,
+  heroCtaTitle: {
+    ...typography.cardTitle,
+    color: colors.textPrimary,
+    marginTop: spacing.innerGapSmall,
+  },
+  heroCtaSubtitle: {
+    ...typography.caption,
     color: colors.textSecondary,
   },
 
@@ -192,14 +254,43 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceMuted,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  thumbnailImage: {
+    width: '100%',
+    height: '100%',
+  },
+  recentEmpty: {
+    ...typography.bodySmall,
+    color: colors.textSecondary,
+    paddingVertical: spacing.innerGapSmall,
   },
   recentInfo: {
     flex: 1,
-    gap: 4,
+    gap: spacing.innerGapSmall,
+  },
+  recentTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.innerGapSmall,
   },
   recentTitle: {
     ...typography.cardTitle,
     color: colors.textPrimary,
+    flexShrink: 1,
+  },
+  resumeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: colors.primaryLight,
+    borderRadius: radii.chip,
+    paddingHorizontal: spacing.innerGapSmall,
+    paddingVertical: 2,
+  },
+  resumeBadgeText: {
+    ...typography.caption,
+    color: colors.primary,
   },
   recentMeta: {
     ...typography.caption,
